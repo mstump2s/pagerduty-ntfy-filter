@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PD-Filter Live</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #69727d; --line: #e3e6ea;
+    --alarm: #d93025; --alarm-bg: #fdecea;
+    --svc: #8a6d00; --svc-bg: #fff6d6;
+    --cust: #5f6b7a; --cust-bg: #eef1f4;
+    --ok: #1e8e3e; --err: #d93025; --info: #3367d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #8b949e; --line: #2a3038;
+      --alarm: #ff6b5e; --alarm-bg: #3a1c1a;
+      --svc: #e5c45a; --svc-bg: #332c12;
+      --cust: #9aa5b1; --cust-bg: #232a32;
+      --ok: #4cc26f; --err: #ff6b5e; --info: #7aa2ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+       margin: 28px 0 10px; font-weight: 600; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 20%, transparent); }
+  .dot.err { background: var(--err); }
+  .status { font-weight: 600; }
+  .meta { color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+          cursor: pointer; text-align: left; color: inherit; font: inherit; }
+  .stat.active { outline: 2px solid var(--info); }
+  .stat .n { font-size: 24px; font-weight: 700; }
+  .stat .l { color: var(--muted); font-size: 12px; }
+  .stat.alarm .n { color: var(--alarm); }
+  .stat.service .n { color: var(--svc); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: color-mix(in srgb, var(--panel) 92%, var(--line)); }
+  tr:last-child td { border-bottom: 0; }
+  td.time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; width: 1%; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .b-alarm { background: var(--alarm-bg); color: var(--alarm); }
+  .b-service { background: var(--svc-bg); color: var(--svc); }
+  .b-customer { background: var(--cust-bg); color: var(--cust); }
+  .b-silent { background: color-mix(in srgb, var(--info) 15%, transparent); color: var(--info); }
+  .stat.silent .n { color: var(--info); }
+  .b-error, .b-pending { background: var(--alarm-bg); color: var(--err); }
+  .b-info { background: color-mix(in srgb, var(--info) 15%, transparent); color: var(--info); }
+  tr.row-alarm td:first-child { box-shadow: inset 3px 0 0 var(--alarm); }
+  a { color: var(--info); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .svc { color: var(--muted); font-size: 12px; }
+  .empty { padding: 18px; color: var(--muted); text-align: center; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { background: var(--cust-bg); border-radius: 6px; padding: 1px 7px; font-size: 12px; }
+  .wrap { overflow-x: auto; }
+  .b-ack, .b-resolve { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .actions { display: flex; gap: 6px; }
+  .ack.resolve:hover { border-color: var(--err); color: var(--err); }
+  .ack { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px; cursor: pointer;
+         border: 1px solid var(--line); background: var(--panel); color: var(--text); white-space: nowrap; }
+  .ack:hover { border-color: var(--ok); color: var(--ok); }
+  .ack:disabled { opacity: .5; cursor: wait; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: calc(100% - 32px);
+           padding: 10px 16px; border-radius: 8px; color: #fff; background: var(--ok); font-weight: 600;
+           box-shadow: 0 4px 16px rgba(0,0,0,.2); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  #toast.show { opacity: 1; }
+  #toast.err { background: var(--err); }
+  @media (max-width: 640px) { .hide-sm { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>PagerDuty-Filter</h1>
+    <span class="status" id="status">verbinde…</span>
+  </header>
+  <div class="meta">
+    <span>Letzte Abfrage: <b id="lastPoll">–</b></span>
+    <span>An seit: <b id="started">–</b></span>
+    <span>Service-Filter: <b id="svcFilter">–</b></span>
+  </div>
+  <div class="meta"><span>Kunden:</span><span class="chips" id="customers"></span></div>
+  <div class="meta" id="shiftRow" hidden>
+    <span>Schicht: <b id="shift">–</b></span>
+    <button class="ack" id="override">Rest der Schicht abgeben</button>
+  </div>
+
+  <div class="stats" id="stats">
+    <button class="stat active" data-f="all"><div class="n" id="nAll">0</div><div class="l">Offen gesamt</div></button>
+    <button class="stat alarm" data-f="alarm"><div class="n" id="nAlarm">0</div><div class="l">🔔 Laut</div></button>
+    <button class="stat silent" data-f="silent"><div class="n" id="nSilent">0</div><div class="l">🔕 Leise Mitteilung</div></button>
+    <button class="stat service" data-f="service"><div class="n" id="nService">0</div><div class="l">Service gefiltert</div></button>
+    <button class="stat" data-f="customer"><div class="n" id="nCustomer">0</div><div class="l">Kein Kunde von dir</div></button>
+  </div>
+
+  <h2 id="mineTitle">Meine Kunden – noch nicht acknowledged</h2>
+  <div class="card wrap"><table>
+    <thead><tr><th>Seit</th><th>Ergebnis</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
+    <tbody id="mine"></tbody>
+  </table></div>
+
+  <h2 id="ackedTitle">Von mir acknowledged</h2>
+  <div class="card wrap"><table>
+    <thead><tr><th>Ack seit</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
+    <tbody id="acked"></tbody>
+  </table></div>
+
+  <h2>Weitere offene Incidents</h2>
+  <div class="card wrap"><table>
+    <thead><tr><th>Seit</th><th>Ergebnis</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
+    <tbody id="incidents"></tbody>
+  </table></div>
+
+  <h2>Verlauf</h2>
+  <div class="card wrap"><table>
+    <thead><tr><th>Zeit</th><th>Ergebnis</th><th>Details</th></tr></thead>
+    <tbody id="events"></tbody>
+  </table></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+  const LABEL = { alarm: "🔔 Laut", silent: "🔕 Leise", service: "Service gefiltert", customer: "Kein Kunde",
+                  pending: "Fehler, neuer Versuch", error: "Fehler", info: "Info",
+                  ack: "✓ Acknowledged", resolve: "✓ Resolved" };
+  let filter = "all";
+  let lastData = null;
+
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const badge = k => `<span class="badge b-${k}">${LABEL[k] || k}</span>`;
+  const link = (title, url) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(title)}</a>` : esc(title);
+  const fmtTime = iso => {
+    if (!iso) return "–";
+    const d = new Date(iso);
+    return isNaN(d) ? esc(iso) : d.toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  };
+
+  document.querySelectorAll(".stat").forEach(b => b.addEventListener("click", () => {
+    filter = b.dataset.f;
+    document.querySelectorAll(".stat").forEach(x => x.classList.toggle("active", x === b));
+    if (lastData) render(lastData);
+  }));
+
+  function render(d) {
+    const inc = d.incidents || [];
+    const count = k => inc.filter(i => i.decision === k).length;
+    document.getElementById("nAll").textContent = inc.length;
+    document.getElementById("nAlarm").textContent = count("alarm");
+    document.getElementById("nSilent").textContent = count("silent");
+    document.getElementById("nService").textContent = count("service");
+    document.getElementById("nCustomer").textContent = count("customer");
+
+    document.getElementById("lastPoll").textContent = d.last_poll ? d.last_poll.slice(11) : "–";
+    document.getElementById("started").textContent = d.started || "–";
+    document.getElementById("svcFilter").textContent = (d.service_filter || []).join(", ") || "alle Services";
+    document.getElementById("customers").innerHTML =
+      (d.customers || []).map(c => `<span class="chip">${esc(c)}</span>`).join("") || "<span>keine</span>";
+
+    const sh = d.shift;
+    document.getElementById("shiftRow").hidden = !sh;
+    if (sh) {
+      const end = sh.end ? new Date(sh.end).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : null;
+      document.getElementById("shift").textContent = sh.schedules.join(", ") + (end ? ` bis ${end}` : "");
+      document.getElementById("override").textContent = `Rest der Schicht an ${d.override_user} abgeben`;
+    }
+
+    const dot = document.getElementById("dot"), st = document.getElementById("status");
+    if (d.last_error) { dot.className = "dot err"; st.textContent = "AN – Fehler: " + d.last_error; }
+    else if (d.paused) { dot.className = "dot"; st.textContent = `AN – pausiert (${d.paused})`; }
+    else { dot.className = "dot on"; st.textContent = "AN"; }
+
+    const rows = inc.filter(i => filter === "all" || i.decision === filter);
+    const incRow = i => `
+      <tr class="${i.decision === "alarm" ? "row-alarm" : ""}">
+        <td class="time">${fmtTime(i.created_at)}</td>
+        <td>${badge(i.decision)}</td>
+        <td>${link(i.title, i.url)}<div class="svc">${esc(i.service)}</div></td>
+        <td class="hide-sm">${esc(i.customer || "")}</td>
+        <td><div class="actions">
+          <button class="ack" data-action="ack" data-id="${esc(i.id)}">Ack</button>
+          <button class="ack resolve" data-action="resolve" data-id="${esc(i.id)}">Resolve</button>
+        </div></td>
+      </tr>`;
+    const inCat = filter !== "all" ? " in dieser Kategorie" : "";
+    const mine = rows.filter(i => i.customer);
+    const others = rows.filter(i => !i.customer);
+    document.getElementById("mineTitle").textContent = `Meine Kunden – noch nicht acknowledged (${mine.length})`;
+    document.getElementById("mine").innerHTML = mine.length ? mine.map(incRow).join("")
+      : `<tr><td colspan="5" class="empty">Nichts offen${inCat}.</td></tr>`;
+    document.getElementById("incidents").innerHTML = others.length ? others.map(incRow).join("")
+      : `<tr><td colspan="5" class="empty">Keine weiteren offenen Incidents${inCat}.</td></tr>`;
+
+    const acked = d.acked || [];
+    document.getElementById("ackedTitle").textContent =
+      (d.acked_mine ? "Von mir acknowledged" : "Acknowledged (alle – eigener PagerDuty-User unbekannt)") +
+      ` (${acked.length})`;
+    document.getElementById("acked").innerHTML = acked.length ? acked.map(i => `
+      <tr>
+        <td class="time">${fmtTime(i.acked_at)}</td>
+        <td>${link(i.title, i.url)}<div class="svc">${esc(i.service)}</div></td>
+        <td class="hide-sm">${esc(i.customer || "")}</td>
+        <td><div class="actions">
+          <button class="ack resolve" data-action="resolve" data-id="${esc(i.id)}">Resolve</button>
+        </div></td>
+      </tr>`).join("") : `<tr><td colspan="4" class="empty">Nichts acknowledged.</td></tr>`;
+
+    const ev = d.events || [];
+    document.getElementById("events").innerHTML = ev.length ? ev.map(e => `
+      <tr class="${e.kind === "alarm" ? "row-alarm" : ""}">
+        <td class="time">${esc(e.time.slice(11))}</td>
+        <td>${badge(e.kind)}</td>
+        <td>${e.title !== undefined ? link(e.title, e.url) + `<div class="svc">${esc(e.service)}${e.kind === "error" ? " · " + esc(e.text) : ""}</div>` : esc(e.text)}</td>
+      </tr>`).join("") : `<tr><td colspan="3" class="empty">Noch nichts passiert.</td></tr>`;
+  }
+
+  let toastTimer;
+  function toast(text, isError) {
+    const t = document.getElementById("toast");
+    t.textContent = text;
+    t.className = "show" + (isError ? " err" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = ""; }, isError ? 7000 : 3000);
+  }
+
+  const onAction = async ev => {
+    const btn = ev.target.closest("button.ack");
+    if (!btn) return;
+    const { action, id } = btn.dataset;
+    const name = action === "resolve" ? "Resolve" : "Ack";
+
+    btn.closest(".actions").querySelectorAll("button").forEach(b => { b.disabled = true; });
+    try {
+      const r = await fetch("/api/" + action, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-PD-Filter": "1" },
+        body: JSON.stringify({ id }),
+      });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || "HTTP " + r.status);
+      if (lastData) {
+        lastData.incidents = lastData.incidents.filter(i => i.id !== id);
+        lastData.acked = (lastData.acked || []).filter(i => i.id !== id);
+      }
+      toast(action === "resolve" ? "✓ Resolved" : "✓ Acknowledged");
+      refresh();
+    } catch (e) {
+      btn.closest(".actions").querySelectorAll("button").forEach(b => { b.disabled = false; });
+      toast(name + " fehlgeschlagen: " + e.message, true);
+    }
+  };
+  document.getElementById("override").addEventListener("click", async ev => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/override", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-PD-Filter": "1" },
+        body: "{}",
+      });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || "HTTP " + r.status);
+      toast("✓ " + res.text);
+      refresh();
+    } catch (e) {
+      toast("Override fehlgeschlagen: " + e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  document.getElementById("mine").addEventListener("click", onAction);
+  document.getElementById("incidents").addEventListener("click", onAction);
+  document.getElementById("acked").addEventListener("click", onAction);
+
+  async function refresh() {
+    try {
+      const r = await fetch("/api/state", { cache: "no-store" });
+      lastData = await r.json();
+      render(lastData);
+    } catch {
+      document.getElementById("dot").className = "dot err";
+      document.getElementById("status").textContent = "AUS – Filter läuft nicht";
+    }
+  }
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+config.env
+seen.json
+pd_filter.log
+pd_filter.pid
+.venv/
+__pycache__/
+.DS_Store
+customers.txt

@@ -1,0 +1,6 @@
+# Ein Kunde pro Zeile. Gross-/Kleinschreibung egal.
+# Treffer, wenn der Text irgendwo im Incident-Titel vorkommt.
+# Aenderungen gelten ab dem naechsten Durchlauf, kein Neustart noetig.
+# Kopieren nach customers.txt und eigene Kunden eintragen.
+kunde-a
+kunde-b
