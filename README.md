@@ -11,7 +11,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
 ## Funktionen
 
 - **Filter nach Kunde und Service:** Kundenliste als einfache Textdatei, Treffer per
-  Teilstring im Incident-Titel (Groß-/Kleinschreibung egal). Optionaler Service-Filter,
+  Teilstring im Incident-Titel (Groß-/Kleinschreibung egal), auch direkt in der
+  Live-Ansicht pflegbar. Optionaler Service-Filter,
   z. B. nur `CSOC (High)` laut.
 - **Laut oder leise:** Laute Alarme mit ntfy-Priorität *urgent*. Leise Mitteilungen
   ohne Ton, optional auf einem eigenen Topic.

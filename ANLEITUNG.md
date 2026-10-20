@@ -24,6 +24,8 @@ in einer eigenen `.venv` im Ordner installiert.
    Incident-Titel vorkommt. Zeilen mit `#` sind Kommentare. Änderungen gelten ab
    dem nächsten Durchlauf, ohne Neustart.
    Mit TextEdit unbedingt als **reinen Text** speichern (Format → In reinen Text umwandeln).
+   Alternativ in der Live-Ansicht: Feld „Kunde hinzufügen“ bzw. × am Kunden.
+   Ohne Kunden wird **nichts** laut gemeldet (nicht etwa alles).
 3. **ntfy-App** auf dem Handy installieren und dein Topic (bzw. beide Topics) abonnieren.
    Für laute Alarme in der App bei der Priorität „urgent“ Ton/Durchbrechen von
    „Nicht stören“ erlauben.

@@ -65,6 +65,11 @@
   .empty { padding: 18px; color: var(--muted); text-align: center; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip { background: var(--cust-bg); border-radius: 6px; padding: 1px 7px; font-size: 12px; }
+  .chip-x { font: inherit; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 0 0 4px; }
+  .chip-x:hover { color: var(--err); }
+  .add-customer { display: flex; gap: 6px; }
+  .add-customer input { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px; width: 150px;
+                        border: 1px solid var(--line); background: var(--panel); color: var(--text); }
   .wrap { overflow-x: auto; }
   .b-ack, .b-resolve { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
   .actions { display: flex; gap: 6px; }
@@ -93,7 +98,12 @@
     <span>An seit: <b id="started">–</b></span>
     <span>Service-Filter: <b id="svcFilter">–</b></span>
   </div>
-  <div class="meta"><span>Kunden:</span><span class="chips" id="customers"></span></div>
+  <div class="meta"><span>Kunden:</span><span class="chips" id="customers"></span>
+    <form id="addCustomer" class="add-customer" hidden>
+      <input id="newCustomer" placeholder="Kunde hinzufügen" maxlength="100" autocomplete="off">
+      <button class="ack" type="submit">+</button>
+    </form>
+  </div>
   <div class="meta" id="shiftRow" hidden>
     <span>Schicht: <b id="shift">–</b></span>
     <button class="ack" id="override">Rest der Schicht abgeben</button>
@@ -169,7 +179,10 @@
     document.getElementById("started").textContent = d.started || "–";
     document.getElementById("svcFilter").textContent = (d.service_filter || []).join(", ") || "alle Services";
     document.getElementById("customers").innerHTML =
-      (d.customers || []).map(c => `<span class="chip">${esc(c)}</span>`).join("") || "<span>keine</span>";
+      (d.customers || []).map(c => `<span class="chip">${esc(c)}${d.customers_editable
+        ? `<button class="chip-x" data-name="${esc(c)}" title="${esc(c)} entfernen">×</button>` : ""}</span>`).join("")
+      || "<span>keine</span>";
+    document.getElementById("addCustomer").hidden = !d.customers_editable;
 
     const sh = d.shift;
     document.getElementById("shiftRow").hidden = !sh;
@@ -280,6 +293,42 @@
       toast("Override fehlgeschlagen: " + e.message, true);
     } finally {
       btn.disabled = false;
+    }
+  });
+  async function editCustomer(action, name) {
+    const r = await fetch("/api/customers/" + action, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-PD-Filter": "1" },
+      body: JSON.stringify({ name }),
+    });
+    const res = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(res.error || "HTTP " + r.status);
+  }
+  document.getElementById("addCustomer").addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const input = document.getElementById("newCustomer");
+    const name = input.value.trim();
+    if (!name) return;
+    try {
+      await editCustomer("add", name);
+      input.value = "";
+      toast("✓ " + name + " hinzugefügt");
+      refresh();
+    } catch (e) {
+      toast("Hinzufügen fehlgeschlagen: " + e.message, true);
+    }
+  });
+  document.getElementById("customers").addEventListener("click", async ev => {
+    const btn = ev.target.closest("button.chip-x");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await editCustomer("remove", btn.dataset.name);
+      toast("✓ " + btn.dataset.name + " entfernt");
+      refresh();
+    } catch (e) {
+      btn.disabled = false;
+      toast("Entfernen fehlgeschlagen: " + e.message, true);
     }
   });
   document.getElementById("mine").addEventListener("click", onAction);

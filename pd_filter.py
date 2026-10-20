@@ -118,6 +118,7 @@ STATE = {
     "acked_mine": False,        # True = "acked" ist auf meinen User gefiltert
     "shift": None,              # aktuelle Schicht: {"schedules": [...], "end": ISO-Zeit}
     "override_user": OVERRIDE_USER,
+    "customers_editable": not os.environ.get("CUSTOMERS", "").strip(),
 }
 EVENTS = deque(maxlen=300)      # Verlauf (neueste zuerst)
 
@@ -179,6 +180,40 @@ def load_customers():
         if line and not line.startswith("#"):
             customers.append(line)
     return customers
+
+
+CUSTOMERS_FROM_ENV = bool(os.environ.get("CUSTOMERS", "").strip())
+CUSTOMERS_LOCK = threading.Lock()
+
+
+def edit_customers(add=None, remove=None):
+    """Kunden in customers.txt ergaenzen oder entfernen (aus der Live-Ansicht).
+    Kommentare und uebrige Zeilen bleiben stehen. Liefert Fehlertext oder None."""
+    if CUSTOMERS_FROM_ENV:
+        return "Kunden kommen aus der Variable CUSTOMERS, nicht aus customers.txt"
+    with CUSTOMERS_LOCK:
+        raw = CUSTOMERS_FILE.read_text(encoding="utf-8") if CUSTOMERS_FILE.exists() else ""
+        if raw.lstrip().startswith("{\\rtf"):
+            return "customers.txt ist Rich Text, bitte erst als reinen Text speichern"
+        lines = raw.splitlines()
+        if add is not None:
+            name = " ".join(add.split())
+            if not name or name.startswith("#") or len(name) > 100:
+                return "Ungueltiger Kundenname"
+            if norm(name) in {norm(l) for l in lines}:
+                return f"{name} steht schon in der Liste"
+            lines.append(name)
+        else:
+            kept = [l for l in lines if norm(l) != norm(remove)]
+            if len(kept) == len(lines):
+                return f"{remove} steht nicht in der Liste"
+            lines = kept
+        tmp = CUSTOMERS_FILE.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.replace(CUSTOMERS_FILE)
+    with STATE_LOCK:
+        STATE["customers"] = load_customers()
+    return None
 
 
 def load_seen():
@@ -505,16 +540,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 STATE["shift"] = None
             return self._json(200, {"ok": True, "text": text})
-        if self.path not in ACTIONS:
+        if self.path not in ACTIONS and self.path not in ("/api/customers/add", "/api/customers/remove"):
             return self._json(404, {"error": "nicht gefunden"})
-        status, kind, label = ACTIONS[self.path]
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 4096:
                 raise ValueError
-            incident_id = str(json.loads(self.rfile.read(length)).get("id", ""))
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict):
+                raise ValueError
         except (ValueError, AttributeError):
             return self._json(400, {"error": "ungueltige Anfrage"})
+
+        if self.path.startswith("/api/customers/"):
+            name = str(body.get("name", ""))
+            adding = self.path.endswith("/add")
+            err = edit_customers(add=name) if adding else edit_customers(remove=name)
+            if err:
+                return self._json(400, {"error": err})
+            text = f"Kunde {'hinzugefuegt' if adding else 'entfernt'}: {name.strip()}"
+            log(text)
+            add_event("info", text)
+            return self._json(200, {"ok": True})
+
+        status, kind, label = ACTIONS[self.path]
+        incident_id = str(body.get("id", ""))
         if not ID_RE.match(incident_id):
             return self._json(400, {"error": "ungueltige Incident-ID"})
 
