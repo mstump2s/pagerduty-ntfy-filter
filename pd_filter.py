@@ -320,7 +320,7 @@ def hand_over_shift():
             for item in body if isinstance(body, list) else []:
                 if item.get("status", 201) >= 300:
                     return f"{s['schedule']}: {'; '.join(item.get('errors') or ['abgelehnt'])}", ""
-            done.append(f"{s['schedule']} bis {datetime.fromisoformat(s['end']).astimezone(TZ):%H:%M}")
+            done.append(f"{s['schedule']} bis {datetime.fromisoformat(s['end'].replace('Z', '+00:00')).astimezone(TZ):%H:%M}")
     except (requests.RequestException, KeyError, ValueError) as e:
         return f"PagerDuty-Fehler: {e}", ""
     _ON_CALL_CACHE["at"] = 0.0   # beim naechsten Durchlauf neu pruefen -> pausiert dann
