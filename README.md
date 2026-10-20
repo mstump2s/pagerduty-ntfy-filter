@@ -21,6 +21,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   - oben die offenen Incidents deiner Kunden, dann die von dir acknowledged Incidents
   - Ack und Resolve mit einem Klick
   - Zähler-Kacheln als Filter, Verlauf aller Entscheidungen
+  - Einstellungen (leise Mitteilungen, Service-Filter, Schedule, Zeitfenster …) live
+    ändern, ohne Neustart
 - **Nur im Schedule aktiv** (`ONLY_ON_CALL=true`): Bist du laut PagerDuty gerade nicht
   on-call, pausiert der Filter und schickt nichts.
 - **Schicht abgeben:** Ein Button legt einen Override von jetzt bis Schichtende auf

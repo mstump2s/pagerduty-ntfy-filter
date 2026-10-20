@@ -88,6 +88,7 @@ NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "30"))
 PD_SERVICE_IDS = [s.strip() for s in os.environ.get("PD_SERVICE_IDS", "").split(",") if s.strip()]
 SERVICE_FILTER = [s.strip().lower() for s in os.environ.get("SERVICE_FILTER", "").split(";") if s.strip()]
+SERVICE_FILTER_TEXT = os.environ.get("SERVICE_FILTER", "").strip()     # Originalschreibweise fuer die Anzeige
 SILENT_FOR = os.environ.get("SILENT_FOR", "kunden").strip().lower()      # kunden | alle | keine
 NTFY_TOPIC_SILENT = os.environ.get("NTFY_TOPIC_SILENT", "").strip()      # optional eigenes Topic fuer leise
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "Europe/Berlin"))
@@ -180,6 +181,96 @@ def load_customers():
         if line and not line.startswith("#"):
             customers.append(line)
     return customers
+
+
+# ---------- Einstellungen aus der Live-Ansicht ----------
+
+# In der Live-Ansicht aenderbar (keine Secrets): Key -> Typ
+EDITABLE = {
+    "SILENT_FOR": ("kunden", "alle", "keine"),
+    "SERVICE_FILTER": str,
+    "ONLY_ON_CALL": bool,
+    "OVERRIDE_USER": str,
+    "ONLY_IN_WINDOW": bool,
+    "START_HOUR": int,
+    "END_HOUR": int,
+    "WEEKDAYS_ONLY": bool,
+    "POLL_SECONDS": int,
+    "QUIET": bool,
+}
+SETTINGS_LOCK = threading.Lock()
+
+
+def current_settings():
+    g = globals()
+    return {k: SERVICE_FILTER_TEXT if k == "SERVICE_FILTER" else g[k] for k in EDITABLE}
+
+
+def parse_setting(key, value):
+    """Wert aus der Live-Ansicht pruefen. Liefert (Python-Wert, Text fuer config.env)."""
+    kind = EDITABLE[key]
+    if kind is bool:
+        if not isinstance(value, bool):
+            raise ValueError("ja/nein erwartet")
+        return value, "true" if value else "false"
+    text = " ".join(str(value).split())
+    if len(text) > 200:
+        raise ValueError("zu lang")
+    if isinstance(kind, tuple):
+        if text not in kind:
+            raise ValueError("erlaubt: " + ", ".join(kind))
+        return text, text
+    if kind is int:
+        number = int(text)
+        low, high = (5, 3600) if key == "POLL_SECONDS" else (0, 24)
+        if not low <= number <= high:
+            raise ValueError(f"erlaubt: {low} bis {high}")
+        return number, str(number)
+    if key == "SERVICE_FILTER":
+        parts = [s.strip() for s in text.split(";") if s.strip()]
+        return [s.lower() for s in parts], ";".join(parts)
+    return text, text
+
+
+def write_config(values):
+    """Werte in config.env setzen: vorhandene Zeile ersetzen, sonst anhaengen. Kommentare bleiben."""
+    lines = CONFIG_FILE.read_text(encoding="utf-8").splitlines() if CONFIG_FILE.exists() else []
+    todo = dict(values)
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if not line.lstrip().startswith("#") and "=" in line and key in todo:
+            lines[i] = f"{key}={todo.pop(key)}"
+    lines += [f"{k}={v}" for k, v in todo.items()]
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(CONFIG_FILE)
+
+
+def update_settings(changes):
+    """Einstellungen pruefen, sofort uebernehmen und in config.env speichern.
+    Liefert (Fehlertext oder None, Liste geaenderter Keys)."""
+    parsed, lines = {}, {}
+    for key, value in changes.items():
+        if key not in EDITABLE:
+            return f"{key} ist nicht aenderbar", []
+        try:
+            parsed[key], lines[key] = parse_setting(key, value)
+        except (ValueError, TypeError) as e:
+            return f"{key}: {e}", []
+    with SETTINGS_LOCK:
+        changed = [k for k in parsed if globals()[k] != parsed[k]]
+        try:
+            write_config({k: lines[k] for k in changed})
+        except OSError as e:
+            return f"config.env nicht gespeichert: {e}", []
+        globals().update({k: parsed[k] for k in changed})
+        if "SERVICE_FILTER" in changed:
+            globals()["SERVICE_FILTER_TEXT"] = lines["SERVICE_FILTER"]
+    _ON_CALL_CACHE["at"] = 0.0
+    with STATE_LOCK:
+        STATE.update(settings=current_settings(), service_filter=SERVICE_FILTER,
+                     poll_seconds=POLL_SECONDS, override_user=OVERRIDE_USER)
+    return None, sorted(changed)
 
 
 CUSTOMERS_FROM_ENV = bool(os.environ.get("CUSTOMERS", "").strip())
@@ -540,7 +631,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 STATE["shift"] = None
             return self._json(200, {"ok": True, "text": text})
-        if self.path not in ACTIONS and self.path not in ("/api/customers/add", "/api/customers/remove"):
+        if self.path not in ACTIONS and self.path not in (
+                "/api/customers/add", "/api/customers/remove", "/api/settings"):
             return self._json(404, {"error": "nicht gefunden"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -551,6 +643,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 raise ValueError
         except (ValueError, AttributeError):
             return self._json(400, {"error": "ungueltige Anfrage"})
+
+        if self.path == "/api/settings":
+            err, changed = update_settings(body)
+            if err:
+                return self._json(400, {"error": err})
+            if changed:
+                text = "Einstellungen geaendert: " + ", ".join(changed)
+                log(text)
+                add_event("info", text)
+            return self._json(200, {"ok": True})
 
         if self.path.startswith("/api/customers/"):
             name = str(body.get("name", ""))
@@ -691,6 +793,7 @@ def main():
     log(f"AN. Intervall {POLL_SECONDS}s, {len(load_customers())} Kunden{window}. Stoppen mit Strg+C.")
     with STATE_LOCK:
         STATE["started"] = now_str()
+        STATE["settings"] = current_settings()
     add_event("info", "Filter eingeschaltet")
     start_dashboard()
 

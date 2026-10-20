@@ -60,6 +60,11 @@ Resolve-Button. Die Tabelle „Weitere offene Incidents“ enthält den Rest. De
 bei einem Account-Key dafür `PD_FROM_EMAIL` setzen, sonst werden alle
 acknowledged Incidents angezeigt.
 
+Unter **Einstellungen** (aufklappen) lassen sich ändern: leise Mitteilungen
+(`SILENT_FOR`), Service-Filter, „nur im Schedule“, Override-User, Zeitfenster,
+Abfrage-Intervall und `QUIET`. Das gilt sofort, ohne Neustart, und wird in
+`config.env` gespeichert. API-Key, ntfy-Topics und Port bleiben bewusst nur in der Datei.
+
 ## 4. Was wann passiert
 
 | Kunde im Titel | Service passt | Ergebnis |
