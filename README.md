@@ -23,8 +23,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   - Zähler-Kacheln als Filter, Verlauf aller Entscheidungen
   - Einstellungen (leise Mitteilungen, Service-Filter, Schedule, Zeitfenster …) live
     ändern, ohne Neustart
-- **Browser-Extension** (optional, Chrome/Edge): Live-Ansicht als Popup, Badge mit der
-  Zahl offener Incidents deiner Kunden
+- **Browser-Extension** (optional, Chrome/Edge): kompaktes Popup mit Ack/Resolve, Badge
+  mit der Zahl offener Incidents deiner Kunden, Icon blinkt bei lauten Alarmen
 - **Nur im Schedule aktiv** (`ONLY_ON_CALL=true`): Bist du laut PagerDuty gerade nicht
   on-call, pausiert der Filter und schickt nichts.
 - **Schicht abgeben:** Ein Button legt einen Override von jetzt bis Schichtende auf

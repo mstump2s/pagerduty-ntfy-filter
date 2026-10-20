@@ -67,9 +67,13 @@ Abfrage-Intervall und `QUIET`. Das gilt sofort, ohne Neustart, und wird in
 
 **Optional als Browser-Extension** (Chrome, Edge): `chrome://extensions` öffnen,
 oben rechts **Entwicklermodus** an, **Entpackte Erweiterung laden** und den Ordner
-`extension` auswählen. Ein Klick aufs Icon öffnet die Live-Ansicht als Popup. Das Badge
-zeigt die offenen Incidents deiner Kunden (`II` = pausiert, `!` = Fehler, `aus` = Filter
-läuft nicht). Bei geändertem `WEB_PORT` den Port in den drei Dateien in `extension/`
+`extension` auswählen. Ein Klick aufs Icon öffnet eine kompakte Ansicht (Status,
+Schicht abgeben, offene Incidents deiner Kunden und deine acknowledged Incidents mit
+Ack/Resolve, Link zur vollen Ansicht; auch direkt unter `http://localhost:8790/mini`).
+Das Badge zeigt die offenen Incidents deiner Kunden (`II` = pausiert, `!` = Fehler,
+`aus` = Filter läuft nicht). Das Icon ist grün (nichts offen), rot (Kunde offen) und
+**blinkt rot**, solange ein lauter Alarm (Kunde + Service passt) nicht acknowledged ist.
+Nach einem Update der Dateien in `chrome://extensions` bei PD-Filter auf ↻ klicken. Bei geändertem `WEB_PORT` den Port in den drei Dateien in `extension/`
 anpassen und die Erweiterung neu laden.
 
 ## 4. Was wann passiert

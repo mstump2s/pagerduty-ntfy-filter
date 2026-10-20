@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PD-Filter Mini</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #69727d; --line: #e3e6ea;
+    --alarm: #d93025; --alarm-bg: #fdecea; --ok: #1e8e3e; --info: #3367d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #8b949e; --line: #2a3038;
+      --alarm: #ff6b5e; --alarm-bg: #3a1c1a; --ok: #4cc26f; --info: #7aa2ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+           background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); }
+  .dot.err { background: var(--alarm); }
+  h1 { font-size: 14px; margin: 0; }
+  .status { color: var(--muted); font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  a { color: var(--info); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .full { font-size: 12px; white-space: nowrap; }
+  .shift { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; color: var(--muted);
+           border-bottom: 1px solid var(--line); }
+  .shift span { flex: 1; }
+  main { padding: 8px 12px 12px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+       margin: 10px 0 6px; font-weight: 600; }
+  .item { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+          margin-bottom: 6px; }
+  .item.alarm { border-left: 3px solid var(--alarm); }
+  .top { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .cust { font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--text); }
+  .item.alarm .cust { color: var(--alarm); }
+  .time { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--alarm); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .2; } }
+  .title { margin: 3px 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .title a { color: var(--text); }
+  .actions { display: flex; gap: 6px; }
+  button { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  button:hover { border-color: var(--ok); color: var(--ok); }
+  button.resolve:hover { border-color: var(--alarm); color: var(--alarm); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .empty { color: var(--muted); text-align: center; padding: 10px; }
+  #toast { position: fixed; left: 12px; right: 12px; bottom: 10px; padding: 8px 12px; border-radius: 8px;
+           color: #fff; background: var(--ok); font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .2s; }
+  #toast.show { opacity: 1; }
+  #toast.err { background: var(--alarm); }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>PD-Filter</h1>
+  <span class="status" id="status">verbinde…</span>
+  <a class="full" href="/" target="_blank" rel="noopener">Volle Ansicht ↗</a>
+</header>
+<div class="shift" id="shiftRow" hidden>
+  <span id="shift"></span>
+  <button id="override">Rest abgeben</button>
+</div>
+<main>
+  <h2 id="mineTitle">Meine Kunden</h2>
+  <div id="mine"></div>
+  <div id="ackedBox">
+    <h2 id="ackedTitle">Von mir acknowledged</h2>
+    <div id="acked"></div>
+  </div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const link = (title, url) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(title)}</a>` : esc(title);
+  const hhmm = iso => {
+    const d = new Date(iso);
+    return isNaN(d) ? "" : d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  function item(i, buttons, time) {
+    const alarm = i.decision === "alarm";
+    return `<div class="item${alarm ? " alarm" : ""}">
+      <div class="top">${alarm ? '<span class="pulse"></span>' : ""}
+        <span class="cust">${esc(i.customer || "")}</span><span>${esc(i.service)}</span>
+        <span class="time">${hhmm(time)}</span></div>
+      <div class="title">${link(i.title, i.url)}</div>
+      <div class="actions">${buttons.map(([action, label]) =>
+        `<button class="${action}" data-action="${action}" data-id="${esc(i.id)}">${label}</button>`).join("")}</div>
+    </div>`;
+  }
+
+  function render(d) {
+    const dot = document.getElementById("dot"), st = document.getElementById("status");
+    if (d.last_error) { dot.className = "dot err"; st.textContent = "Fehler: " + d.last_error; }
+    else if (d.paused) { dot.className = "dot"; st.textContent = "pausiert – " + d.paused; }
+    else { dot.className = "dot on"; st.textContent = "aktiv · " + (d.last_poll || "").slice(11, 16); }
+
+    const sh = d.shift;
+    document.getElementById("shiftRow").hidden = !sh;
+    if (sh) {
+      document.getElementById("shift").textContent = "Schicht" + (sh.end ? " bis " + hhmm(sh.end) : "");
+      document.getElementById("override").title = `Rest der Schicht an ${d.override_user} abgeben`;
+    }
+
+    const mine = (d.incidents || []).filter(i => i.customer)
+      .sort((a, b) => (b.decision === "alarm") - (a.decision === "alarm"));
+    document.getElementById("mineTitle").textContent = `Meine Kunden · offen (${mine.length})`;
+    document.getElementById("mine").innerHTML = mine.length
+      ? mine.map(i => item(i, [["ack", "Ack"], ["resolve", "Resolve"]], i.created_at)).join("")
+      : '<div class="empty">Alles ruhig ✓</div>';
+
+    const acked = d.acked || [];
+    document.getElementById("ackedBox").hidden = !acked.length;
+    document.getElementById("ackedTitle").textContent = `Von mir acknowledged (${acked.length})`;
+    document.getElementById("acked").innerHTML = acked.map(i => item(i, [["resolve", "Resolve"]], i.acked_at)).join("");
+  }
+
+  let toastTimer;
+  function toast(text, isError) {
+    const t = document.getElementById("toast");
+    t.textContent = text;
+    t.className = "show" + (isError ? " err" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = ""; }, isError ? 6000 : 2500);
+  }
+
+  async function post(path, body) {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-PD-Filter": "1" },
+      body: JSON.stringify(body),
+    });
+    const res = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(res.error || "HTTP " + r.status);
+    return res;
+  }
+
+  document.querySelector("main").addEventListener("click", async ev => {
+    const btn = ev.target.closest("button[data-action]");
+    if (!btn) return;
+    const { action, id } = btn.dataset;
+    btn.parentElement.querySelectorAll("button").forEach(b => { b.disabled = true; });
+    try {
+      await post("/api/" + action, { id });
+      toast(action === "resolve" ? "✓ Resolved" : "✓ Acknowledged");
+      refresh();
+    } catch (e) {
+      btn.parentElement.querySelectorAll("button").forEach(b => { b.disabled = false; });
+      toast((action === "resolve" ? "Resolve" : "Ack") + " fehlgeschlagen: " + e.message, true);
+    }
+  });
+
+  document.getElementById("override").addEventListener("click", async ev => {
+    const btn = ev.currentTarget;
+    btn.disabled = true;
+    try {
+      const res = await post("/api/override", {});
+      toast("✓ " + res.text);
+      refresh();
+    } catch (e) {
+      toast("Override fehlgeschlagen: " + e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function refresh() {
+    try {
+      const r = await fetch("/api/state", { cache: "no-store" });
+      render(await r.json());
+    } catch {
+      document.getElementById("dot").className = "dot err";
+      document.getElementById("status").textContent = "Filter läuft nicht";
+    }
+  }
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

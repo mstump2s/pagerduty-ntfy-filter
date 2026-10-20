@@ -103,6 +103,7 @@ WEB_PORT = int(os.environ.get("WEB_PORT", "8790") or 0)   # 0 = Live-Ansicht aus
 PD_FROM_EMAIL = os.environ.get("PD_FROM_EMAIL", "").strip()
 PD_API = "https://api.pagerduty.com"
 DASHBOARD_FILE = BASE_DIR / "dashboard.html"
+MINI_FILE = BASE_DIR / "mini.html"          # kompakte Ansicht fuer das Extension-Popup
 
 # Zustand fuer die Live-Ansicht
 STATE_LOCK = threading.Lock()
@@ -604,11 +605,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, b"verboten", "text/plain; charset=utf-8")
-        if self.path in ("/", "/index.html"):
+        pages = {"/": DASHBOARD_FILE, "/index.html": DASHBOARD_FILE, "/mini": MINI_FILE}
+        if self.path in pages:
             try:
-                body = DASHBOARD_FILE.read_bytes()
+                body = pages[self.path].read_bytes()
             except FileNotFoundError:
-                return self._send(404, b"dashboard.html fehlt", "text/plain; charset=utf-8")
+                return self._send(404, f"{pages[self.path].name} fehlt".encode(), "text/plain; charset=utf-8")
             return self._send(200, body, "text/html; charset=utf-8")
         if self.path == "/api/state":
             with STATE_LOCK:
