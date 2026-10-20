@@ -65,6 +65,13 @@ Unter **Einstellungen** (aufklappen) lassen sich ändern: leise Mitteilungen
 Abfrage-Intervall und `QUIET`. Das gilt sofort, ohne Neustart, und wird in
 `config.env` gespeichert. API-Key, ntfy-Topics und Port bleiben bewusst nur in der Datei.
 
+**Optional als Browser-Extension** (Chrome, Edge): `chrome://extensions` öffnen,
+oben rechts **Entwicklermodus** an, **Entpackte Erweiterung laden** und den Ordner
+`extension` auswählen. Ein Klick aufs Icon öffnet die Live-Ansicht als Popup. Das Badge
+zeigt die offenen Incidents deiner Kunden (`II` = pausiert, `!` = Fehler, `aus` = Filter
+läuft nicht). Bei geändertem `WEB_PORT` den Port in den drei Dateien in `extension/`
+anpassen und die Erweiterung neu laden.
+
 ## 4. Was wann passiert
 
 | Kunde im Titel | Service passt | Ergebnis |

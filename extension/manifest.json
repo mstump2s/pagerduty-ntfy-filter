@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "PD-Filter",
+  "version": "1.0",
+  "description": "Live-Ansicht des lokalen PagerDuty-Filters als Popup, Badge mit offenen Incidents deiner Kunden.",
+  "action": { "default_popup": "popup.html", "default_title": "PD-Filter" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["alarms"],
+  "host_permissions": ["http://localhost:8790/*"]
+}
