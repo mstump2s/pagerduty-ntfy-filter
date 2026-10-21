@@ -28,7 +28,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
 - **Nur im Schedule aktiv** (`ONLY_ON_CALL=true`): Bist du laut PagerDuty gerade nicht
   on-call, pausiert der Filter und schickt nichts.
 - **Schicht abgeben:** Ein Button legt einen Override von jetzt bis Schichtende auf
-  einen anderen User an (`OVERRIDE_USER`, z. B. ein Dummy-User).
+  einen anderen User an (`OVERRIDE_USER`, z. B. ein Dummy-User). Nach einer Pause holt
+  „Schicht zurückholen“ sie wieder zurück (löscht den Override).
 - **Arbeitszeiten** (`ONLY_IN_WINDOW=true`): nur zu festen Zeiten aktiv.
 
 ## Schnellstart

@@ -6,3 +6,4 @@ pd_filter.pid
 __pycache__/
 .DS_Store
 customers.txt
+overrides.json

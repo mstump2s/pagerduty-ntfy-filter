@@ -70,6 +70,10 @@
   <span id="shift"></span>
   <button id="override">Rest abgeben</button>
 </div>
+<div class="shift" id="takeBackRow" hidden>
+  <span id="handedOver"></span>
+  <button id="takeBack">Zurückholen</button>
+</div>
 <main>
   <h2 id="mineTitle">Meine Kunden</h2>
   <div id="mine"></div>
@@ -113,6 +117,10 @@
       document.getElementById("shift").textContent = "Schicht" + (sh.end ? " bis " + hhmm(sh.end) : "");
       document.getElementById("override").title = `Rest der Schicht an ${d.override_user} abgeben`;
     }
+    const ov = d.overrides || [];
+    document.getElementById("takeBackRow").hidden = !ov.length;
+    document.getElementById("handedOver").textContent = ov.length
+      ? `Abgegeben an ${d.override_user} bis ` + hhmm(ov.map(o => o.end).sort().pop()) : "";
 
     const mine = (d.incidents || []).filter(i => i.customer)
       .sort((a, b) => (b.decision === "alarm") - (a.decision === "alarm"));
@@ -162,19 +170,20 @@
     }
   });
 
-  document.getElementById("override").addEventListener("click", async ev => {
-    const btn = ev.currentTarget;
-    btn.disabled = true;
-    try {
-      const res = await post("/api/override", {});
-      toast("✓ " + res.text);
-      refresh();
-    } catch (e) {
-      toast("Override fehlgeschlagen: " + e.message, true);
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  [["override", "/api/override", "Override"], ["takeBack", "/api/override/remove", "Zurückholen"]]
+    .forEach(([id, path, label]) => document.getElementById(id).addEventListener("click", async ev => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await post(path, {});
+        toast("✓ " + res.text);
+        refresh();
+      } catch (e) {
+        toast(label + " fehlgeschlagen: " + e.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    }));
 
   async function refresh() {
     try {

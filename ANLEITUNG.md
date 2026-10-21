@@ -102,6 +102,12 @@ und den Button **„Rest der Schicht an CSOC Dummy abgeben“**. Ein Klick legt 
 (Standard `CSOC Dummy`, Name oder E-Mail). Mit `ONLY_ON_CALL=true` pausiert der Filter
 danach automatisch.
 
+**Schicht zurückholen:** Solange ein selbst gesetzter Override läuft, zeigt die
+Live-Ansicht (und die Mini-Ansicht) den Button **„Schicht zurückholen“**, z. B. nach einer
+Pause. Er löscht den Override in PagerDuty wieder; läuft er schon, wird er auf jetzt
+gekürzt. Die gesetzten Overrides merkt sich der Filter in `overrides.json`, auch über
+einen Neustart hinweg. Overrides, die direkt in PagerDuty angelegt wurden, kennt er nicht.
+
 ## 5. Dateien
 
 | Datei | Inhalt |
@@ -110,4 +116,4 @@ danach automatisch.
 | `dashboard.html` | Live-Ansicht |
 | `config.env` | deine Einstellungen inkl. API-Key (**nicht weitergeben**) |
 | `customers.txt` | deine Kundenliste (nicht im Repo, Vorlage: `customers.txt.example`) |
-| `seen.json`, `pd_filter.log`, `pd_filter.pid` | werden automatisch angelegt |
+| `seen.json`, `overrides.json`, `pd_filter.log`, `pd_filter.pid` | werden automatisch angelegt |

@@ -60,6 +60,7 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 CUSTOMERS_FILE = BASE_DIR / "customers.txt"
 SEEN_FILE = BASE_DIR / "seen.json"
+OVERRIDES_FILE = BASE_DIR / "overrides.json"
 CONFIG_FILE = BASE_DIR / "config.env"
 
 
@@ -120,6 +121,7 @@ STATE = {
     "acked_mine": False,        # True = "acked" ist auf meinen User gefiltert
     "shift": None,              # aktuelle Schicht: {"schedules": [...], "end": ISO-Zeit}
     "override_user": OVERRIDE_USER,
+    "overrides": [],            # von mir gesetzte, noch laufende Overrides: [{"schedule", "end", ...}]
     "customers_editable": not os.environ.get("CUSTOMERS", "").strip(),
 }
 EVENTS = deque(maxlen=300)      # Verlauf (neueste zuerst)
@@ -399,6 +401,7 @@ def on_call_now():
     _ON_CALL_CACHE.update(at=time.monotonic(), value=value)
     ends = [s["end"] for s in shifts.values() if s["end"]]
     with STATE_LOCK:
+        STATE["overrides"] = load_overrides()
         STATE["shift"] = {"schedules": [s["schedule"] for s in shifts.values()],
                           "end": max(ends) if ends else None} if shifts else None
     return value
@@ -413,6 +416,33 @@ def find_user_id(name_or_email):
                  if wanted in (u.get("name", "").casefold(), u.get("email", "").casefold())), None)
 
 
+def parse_time(iso):
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(TZ)
+
+
+def load_overrides():
+    """Selbst gesetzte Overrides, die noch nicht abgelaufen sind (ueberstehen einen Neustart)."""
+    try:
+        overrides = json.loads(OVERRIDES_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        overrides = []
+    now = datetime.now(TZ)
+    return [o for o in overrides if parse_time(o["end"]) > now]
+
+
+def save_overrides(overrides):
+    OVERRIDES_FILE.write_text(json.dumps(overrides), encoding="utf-8")
+    with STATE_LOCK:
+        STATE["overrides"] = overrides
+
+
+def pd_write_headers():
+    headers = dict(PD_HEADERS, **{"Content-Type": "application/json"})
+    if PD_FROM_EMAIL:
+        headers["From"] = PD_FROM_EMAIL
+    return headers
+
+
 def hand_over_shift():
     """Rest meiner aktuellen Schicht(en) per Override an OVERRIDE_USER geben.
     Liefert (Fehlertext oder None, Beschreibung)."""
@@ -422,9 +452,8 @@ def hand_over_shift():
         find_my_user_id()
     if not MY_USER_ID:
         return "Eigener PagerDuty-User unbekannt (bei Account-Key PD_FROM_EMAIL setzen)", ""
-    headers = dict(PD_HEADERS, **{"Content-Type": "application/json"})
-    if PD_FROM_EMAIL:
-        headers["From"] = PD_FROM_EMAIL
+    headers = pd_write_headers()
+    overrides = load_overrides()
     try:
         shifts = fetch_my_shifts()
         if not shifts:
@@ -444,14 +473,44 @@ def hand_over_shift():
                 return f"{s['schedule']}: {pd_error_text(r)}", ""
             # Sammel-Endpunkt: Status steht pro Override in der Antwort
             body = r.json()
-            for item in body if isinstance(body, list) else []:
+            for item in body if isinstance(body, list) else [body]:
                 if item.get("status", 201) >= 300:
                     return f"{s['schedule']}: {'; '.join(item.get('errors') or ['abgelehnt'])}", ""
-            done.append(f"{s['schedule']} bis {datetime.fromisoformat(s['end'].replace('Z', '+00:00')).astimezone(TZ):%H:%M}")
+                # ID merken, damit "Schicht zurueckholen" den Override wieder loeschen kann
+                if item.get("override", {}).get("id"):
+                    overrides.append({"schedule_id": schedule_id, "schedule": s["schedule"],
+                                      "id": item["override"]["id"], "end": s["end"]})
+                    save_overrides(overrides)
+            done.append(f"{s['schedule']} bis {parse_time(s['end']):%H:%M}")
     except (requests.RequestException, KeyError, ValueError) as e:
         return f"PagerDuty-Fehler: {e}", ""
     _ON_CALL_CACHE["at"] = 0.0   # beim naechsten Durchlauf neu pruefen -> pausiert dann
     return None, f"Override an {OVERRIDE_USER}: " + ", ".join(done)
+
+
+def take_back_shift():
+    """Meine Overrides loeschen, die Schicht gehoert dann wieder mir. Laeuft ein Override schon,
+    kuerzt PagerDuty ihn auf jetzt. Liefert (Fehlertext oder None, Beschreibung)."""
+    overrides = load_overrides()
+    if not overrides:
+        return "Kein abgegebener Override gefunden", ""
+    headers = pd_write_headers()
+    done = []
+    try:
+        for o in list(overrides):
+            r = requests.delete(f"{PD_API}/schedules/{o['schedule_id']}/overrides/{o['id']}",
+                                headers=headers, timeout=20)
+            if not r.ok and r.status_code != 404:   # 404: in PagerDuty schon geloescht
+                save_overrides(overrides)
+                return f"{o['schedule']}: {pd_error_text(r)}", ""
+            overrides.remove(o)
+            done.append(o["schedule"])
+    except requests.RequestException as e:
+        save_overrides(overrides)
+        return f"PagerDuty-Fehler: {e}", ""
+    save_overrides(overrides)
+    _ON_CALL_CACHE["at"] = 0.0   # beim naechsten Durchlauf neu pruefen -> wieder aktiv
+    return None, "Schicht zurueckgeholt: " + ", ".join(done)
 
 
 def fetch_my_acked(customers):
@@ -633,6 +692,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 STATE["shift"] = None
             return self._json(200, {"ok": True, "text": text})
+        if self.path == "/api/override/remove":
+            err, text = take_back_shift()
+            if err:
+                log(f"Zurueckholen fehlgeschlagen: {err}")
+                add_event("error", f"Zurueckholen fehlgeschlagen: {err}")
+                return self._json(502, {"error": err})
+            log(text)
+            add_event("info", text)
+            return self._json(200, {"ok": True, "text": text})
         if self.path not in ACTIONS and self.path not in (
                 "/api/customers/add", "/api/customers/remove", "/api/settings"):
             return self._json(404, {"error": "nicht gefunden"})
@@ -796,6 +864,7 @@ def main():
     with STATE_LOCK:
         STATE["started"] = now_str()
         STATE["settings"] = current_settings()
+        STATE["overrides"] = load_overrides()
     add_event("info", "Filter eingeschaltet")
     start_dashboard()
 
