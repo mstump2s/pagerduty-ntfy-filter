@@ -579,7 +579,7 @@ def start_las(mode="las"):
             r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
                 "notification_rule": {
                     "type": "assignment_notification_rule", "start_delay_in_minutes": 0, "urgency": "high",
-                    "contact_method": {"id": c["id"], "type": "push_notification_contact_method_reference"},
+                    "contact_method": {"id": c["id"], "type": "push_notification_contact_method"},
                 }})
             if not r.ok:
                 raise RuntimeError(f"{c.get('summary', c['id'])}: {pd_error_text(r)}")
