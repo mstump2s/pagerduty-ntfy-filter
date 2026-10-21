@@ -108,12 +108,16 @@ danach automatisch.
 
 **LAS (Last Analyst Standing):** An Tagen, an denen du ab 16 Uhr alle Kunden übernimmst,
 klickst du in der Live-Ansicht (oder Mini-Ansicht) auf **„LAS an bis 18:00“**. Der Filter
-legt dann in PagerDuty für jedes Gerät mit PagerDuty-App eine Benachrichtigungsregel an
-(sofortiger Push, hohe und niedrige Dringlichkeit). Um `LAS_END_HOUR` (Standard 18 Uhr)
-löscht er sie automatisch wieder, auch wenn er zwischendurch aus war (dann beim nächsten
-Start). Vorher geht es mit **„LAS beenden“**. Es werden nur die selbst angelegten Regeln
-gelöscht (gemerkt in `las.json`). Ein neues Gerät zählt erst, wenn du dich dort in der
-PagerDuty-App angemeldet hast. Die ntfy-Mitteilungen bleiben während LAS unverändert.
+sorgt dann in PagerDuty für jedes Gerät mit PagerDuty-App für eine Push-Regel (sofort, hohe
+Dringlichkeit); schon vorhandene Push-Regeln übernimmt er, statt doppelte anzulegen. Um
+`LAS_END_HOUR` (Standard 18 Uhr) löscht er diese Push-Regeln wieder, auch wenn er
+zwischendurch aus war (dann beim nächsten Start). Vorher geht es mit **„LAS beenden“**.
+Andere Regeln, z. B. ein Anruf nach 5 Minuten, bleiben immer unangetastet. Die Regeln merkt
+er sich in `las.json`. Ein neues Gerät zählt erst, wenn du dich dort in der PagerDuty-App
+angemeldet hast. Die ntfy-Mitteilungen bleiben während LAS unverändert.
+
+Der Button **„Schicht an“** schaltet dieselben Push-Regeln an, aber ohne automatisches
+Ende: Sie bleiben, bis du **„Schicht beenden“** klickst.
 
 **Schicht zurückholen:** Solange ein selbst gesetzter Override läuft, zeigt die
 Live-Ansicht (und die Mini-Ansicht) den Button **„Schicht zurückholen“**, z. B. nach einer

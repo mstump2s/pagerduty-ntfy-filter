@@ -71,8 +71,9 @@
   <button id="override">Rest abgeben</button>
 </div>
 <div class="shift">
-  <span id="las">LAS aus</span>
+  <span id="las">PD-Push aus</span>
   <button id="lasToggle">LAS an</button>
+  <button id="shiftPush">Schicht</button>
 </div>
 <div class="shift" id="takeBackRow" hidden>
   <span id="handedOver"></span>
@@ -121,10 +122,12 @@
       document.getElementById("shift").textContent = "Schicht" + (sh.end ? " bis " + hhmm(sh.end) : "");
       document.getElementById("override").title = `Rest der Schicht an ${d.override_user} abgeben`;
     }
-    document.getElementById("las").textContent = d.las ? "LAS an bis " + hhmm(d.las.until) : "LAS aus";
+    document.getElementById("las").textContent = !d.las ? "PD-Push aus"
+      : d.las.mode === "schicht" ? "PD-Push an (Schicht)" : "PD-Push an (LAS bis " + hhmm(d.las.until) + ")";
     const lasBtn = document.getElementById("lasToggle");
     lasBtn.textContent = d.las ? "Beenden" : "LAS an";
     lasBtn.dataset.on = d.las ? "1" : "";
+    document.getElementById("shiftPush").hidden = !!d.las;
     const ov = d.overrides || [];
     document.getElementById("takeBackRow").hidden = !ov.length;
     document.getElementById("handedOver").textContent = ov.length
@@ -179,7 +182,8 @@
   });
 
   [["override", () => "/api/override", "Override"], ["takeBack", () => "/api/override/remove", "Zurückholen"],
-   ["lasToggle", btn => btn.dataset.on ? "/api/las/stop" : "/api/las/start", "LAS"]]
+   ["lasToggle", btn => btn.dataset.on ? "/api/las/stop" : "/api/las/start", "LAS"],
+   ["shiftPush", () => "/api/schicht/start", "Schicht"]]
     .forEach(([id, path, label]) => document.getElementById(id).addEventListener("click", async ev => {
       const btn = ev.currentTarget;
       btn.disabled = true;

@@ -119,8 +119,9 @@
     <button class="ack" id="override">Rest der Schicht abgeben</button>
   </div>
   <div class="meta">
-    <span>LAS: <b id="las">aus</b></span>
+    <span>PagerDuty-Push: <b id="las">aus</b></span>
     <button class="ack" id="lasToggle">LAS an</button>
+    <button class="ack" id="shiftPush">Schicht an</button>
   </div>
   <div class="meta" id="takeBackRow" hidden>
     <span>Abgegeben: <b id="handedOver">–</b></span>
@@ -144,7 +145,7 @@
       <label>Schicht abgeben an (PagerDuty-Name oder E-Mail)
         <input name="OVERRIDE_USER">
       </label>
-      <label>LAS (PagerDuty-Benachrichtigungen an) bis (Uhr)
+      <label>LAS (PagerDuty-Push an) bis (Uhr)
         <input type="number" name="LAS_END_HOUR" min="0" max="24">
       </label>
       <label class="check"><input type="checkbox" name="ONLY_IN_WINDOW"> Nur im Zeitfenster aktiv</label>
@@ -246,11 +247,14 @@
       document.getElementById("shift").textContent = sh.schedules.join(", ") + (end ? ` bis ${end}` : "");
       document.getElementById("override").textContent = `Rest der Schicht an ${d.override_user} abgeben`;
     }
-    const lasEnd = d.las ? new Date(d.las.until).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : null;
-    document.getElementById("las").textContent = lasEnd ? `an bis ${lasEnd} (PagerDuty-Push)` : "aus";
+    const lasEnd = d.las?.until ? new Date(d.las.until).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : null;
+    document.getElementById("las").textContent = !d.las ? "aus"
+      : d.las.mode === "schicht" ? "an (Schicht, bis du beendest)" : `an (LAS bis ${lasEnd})`;
     const lasBtn = document.getElementById("lasToggle");
-    lasBtn.textContent = d.las ? "LAS beenden" : `LAS an bis ${String(d.settings?.LAS_END_HOUR ?? 18).padStart(2, "0")}:00`;
+    lasBtn.textContent = d.las ? (d.las.mode === "schicht" ? "Schicht beenden" : "LAS beenden")
+      : `LAS an bis ${String(d.settings?.LAS_END_HOUR ?? 18).padStart(2, "0")}:00`;
     lasBtn.dataset.on = d.las ? "1" : "";
+    document.getElementById("shiftPush").hidden = !!d.las;
     const ov = d.overrides || [];
     document.getElementById("takeBackRow").hidden = !ov.length;
     document.getElementById("handedOver").textContent = ov.map(o => `${o.schedule} bis ${
@@ -341,7 +345,8 @@
     }
   };
   [["override", () => "/api/override", "Override"], ["takeBack", () => "/api/override/remove", "Zurückholen"],
-   ["lasToggle", btn => btn.dataset.on ? "/api/las/stop" : "/api/las/start", "LAS"]]
+   ["lasToggle", btn => btn.dataset.on ? "/api/las/stop" : "/api/las/start", "LAS"],
+   ["shiftPush", () => "/api/schicht/start", "Schicht"]]
     .forEach(([id, path, label]) => document.getElementById(id).addEventListener("click", async ev => {
       const btn = ev.currentTarget;
       btn.disabled = true;

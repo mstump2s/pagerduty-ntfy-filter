@@ -126,7 +126,7 @@ STATE = {
     "shift": None,              # aktuelle Schicht: {"schedules": [...], "end": ISO-Zeit}
     "override_user": OVERRIDE_USER,
     "overrides": [],            # von mir gesetzte, noch laufende Overrides: [{"schedule", "end", ...}]
-    "las": None,                # LAS aktiv: {"until": ISO-Zeit}
+    "las": None,                # Push-Regeln aktiv: {"mode": "las"|"schicht", "until": ISO-Zeit oder None}
     "customers_editable": not os.environ.get("CUSTOMERS", "").strip(),
 }
 EVENTS = deque(maxlen=300)      # Verlauf (neueste zuerst)
@@ -534,25 +534,34 @@ def save_las(las):
     else:
         LAS_FILE.unlink(missing_ok=True)
     with STATE_LOCK:
-        STATE["las"] = {"until": las["until"]} if las else None
+        STATE["las"] = las_view(las)
 
 
-def start_las():
-    """Bis LAS_END_HOUR fuer jedes Push-Geraet eine PD-Benachrichtigungsregel anlegen
-    (hohe und niedrige Dringlichkeit). Liefert (Fehlertext oder None, Beschreibung)."""
+def las_view(las):
+    return {"mode": las.get("mode", "las"), "until": las["until"]} if las else None
+
+
+def start_las(mode="las"):
+    """Fuer jedes Push-Geraet eine PD-Benachrichtigungsregel (sofort, hohe Dringlichkeit)
+    sicherstellen: bei "las" bis LAS_END_HOUR, bei "schicht" bis zum Ausschalten per Hand. Schon vorhandene Push-Regeln werden uebernommen, damit es keine
+    doppelten gibt, und am Ende mit entfernt. Andere Regeln (z. B. Anruf) bleiben unangetastet.
+    Liefert (Fehlertext oder None, Beschreibung)."""
     if load_las():
-        return "LAS ist schon an", ""
-    now = datetime.now(TZ)
-    until = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=LAS_END_HOUR)
-    if until <= now:
-        return f"LAS-Ende {LAS_END_HOUR}:00 Uhr ist heute schon vorbei", ""
+        return "PagerDuty-Push ist schon an (LAS oder Schicht)", ""
+    until = None
+    if mode == "las":
+        now = datetime.now(TZ)
+        until = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=LAS_END_HOUR)
+        if until <= now:
+            return f"LAS-Ende {LAS_END_HOUR}:00 Uhr ist heute schon vorbei", ""
+    until_text = until.isoformat() if until else None
     if MY_USER_ID is None:
         find_my_user_id()
     if not MY_USER_ID:
         return "Eigener PagerDuty-User unbekannt (bei Account-Key PD_FROM_EMAIL setzen)", ""
     base = f"{PD_API}/users/{MY_USER_ID}"
     headers = pd_write_headers()
-    rules = []
+    created = []
     try:
         r = requests.get(f"{base}/contact_methods", headers=PD_HEADERS, timeout=20)
         r.raise_for_status()
@@ -560,25 +569,30 @@ def start_las():
                    if c["type"] == "push_notification_contact_method"]
         if not devices:
             return "Kein Geraet fuer PagerDuty-Push registriert (PagerDuty-App anmelden)", ""
+        r = requests.get(f"{base}/notification_rules", headers=PD_HEADERS, timeout=20)
+        r.raise_for_status()
+        existing = {n["contact_method"]["id"]: n["id"] for n in r.json().get("notification_rules", [])
+                    if n.get("urgency") == "high" and n["contact_method"].get("id") in {c["id"] for c in devices}}
         for c in devices:
-            for urgency in ("high", "low"):
-                r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
-                    "notification_rule": {
-                        "type": "assignment_notification_rule", "start_delay_in_minutes": 0,
-                        "urgency": urgency,
-                        "contact_method": {"id": c["id"], "type": "push_notification_contact_method_reference"},
-                    }})
-                if not r.ok:
-                    raise RuntimeError(f"{c.get('summary', c['id'])}: {pd_error_text(r)}")
-                rules.append(r.json()["notification_rule"]["id"])
+            if c["id"] in existing:
+                continue
+            r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
+                "notification_rule": {
+                    "type": "assignment_notification_rule", "start_delay_in_minutes": 0, "urgency": "high",
+                    "contact_method": {"id": c["id"], "type": "push_notification_contact_method_reference"},
+                }})
+            if not r.ok:
+                raise RuntimeError(f"{c.get('summary', c['id'])}: {pd_error_text(r)}")
+            created.append(r.json()["notification_rule"]["id"])
     except (requests.RequestException, KeyError, ValueError, RuntimeError) as e:
-        # Halb angelegte Regeln nicht stehen lassen
-        save_las({"until": until.isoformat(), "rules": rules})
+        # Halb angelegte Regeln nicht stehen lassen (vorhandene bleiben)
+        save_las({"mode": mode, "until": until_text, "rules": created})
         stop_las()
         return f"PagerDuty-Fehler: {e}", ""
-    save_las({"until": until.isoformat(), "rules": rules})
+    save_las({"mode": mode, "until": until_text, "rules": created + list(existing.values())})
     names = ", ".join(c.get("summary", "") for c in devices)
-    return None, f"LAS an bis {until:%H:%M}: PagerDuty-Push auf {names}"
+    what = f"LAS an bis {until:%H:%M}" if until else "Schicht an"
+    return None, f"{what}: PagerDuty-Push auf {names}"
 
 
 def stop_las():
@@ -586,7 +600,7 @@ def stop_las():
     Liefert (Fehlertext oder None, Beschreibung)."""
     las = load_las()
     if not las:
-        return "LAS ist nicht an", ""
+        return "PagerDuty-Push ist nicht an", ""
     headers = pd_write_headers()
     try:
         for rule_id in list(las["rules"]):
@@ -600,13 +614,14 @@ def stop_las():
         save_las(las)
         return f"PagerDuty-Fehler: {e}", ""
     save_las(None)
-    return None, "LAS aus: PagerDuty-Benachrichtigungen wieder entfernt"
+    what = "Schicht" if las.get("mode") == "schicht" else "LAS"
+    return None, f"{what} aus: PagerDuty-Push-Regeln entfernt"
 
 
 def end_las_if_due():
     """Um LAS_END_HOUR (bzw. beim naechsten Start danach) automatisch ausschalten."""
     las = load_las()
-    if not las or parse_time(las["until"]) > datetime.now(TZ):
+    if not las or not las["until"] or parse_time(las["until"]) > datetime.now(TZ):
         return
     if MY_USER_ID is None:
         find_my_user_id()
@@ -796,11 +811,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 STATE["shift"] = None
             return self._json(200, {"ok": True, "text": text})
-        if self.path in ("/api/las/start", "/api/las/stop"):
-            err, text = start_las() if self.path.endswith("start") else stop_las()
+        if self.path in ("/api/las/start", "/api/schicht/start", "/api/las/stop"):
+            if self.path.endswith("start"):
+                err, text = start_las("schicht" if "schicht" in self.path else "las")
+            else:
+                err, text = stop_las()
             if err:
-                log(f"LAS: {err}")
-                add_event("error", f"LAS: {err}")
+                log(f"PagerDuty-Push: {err}")
+                add_event("error", f"PagerDuty-Push: {err}")
                 return self._json(502, {"error": err})
             log(text)
             add_event("info", text)
@@ -978,8 +996,7 @@ def main():
         STATE["started"] = now_str()
         STATE["settings"] = current_settings()
         STATE["overrides"] = load_overrides()
-        las = load_las()
-        STATE["las"] = {"until": las["until"]} if las else None
+        STATE["las"] = las_view(load_las())
     add_event("info", "Filter eingeschaltet")
     start_dashboard()
 

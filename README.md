@@ -31,7 +31,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   einen anderen User an (`OVERRIDE_USER`, z. B. ein Dummy-User). Nach einer Pause holt
   „Schicht zurückholen“ sie wieder zurück (löscht den Override).
 - **LAS (Last Analyst Standing):** Ein Button schaltet die PagerDuty-Push-Benachrichtigungen
-  bis 18 Uhr an (alle Kunden), danach entfernt der Filter sie automatisch wieder.
+  bis 18 Uhr an (alle Kunden), danach entfernt der Filter sie automatisch wieder. „Schicht“
+  schaltet sie ohne Endzeit an, bis du sie selbst wieder ausschaltest.
 - **Arbeitszeiten** (`ONLY_IN_WINDOW=true`): nur zu festen Zeiten aktiv.
 
 ## Schnellstart
