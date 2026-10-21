@@ -36,7 +36,7 @@ oder Umgebungsvariablen (die haben Vorrang):
   START_HOUR          optional, Standard: 8
   END_HOUR            optional, Standard: 18
   WEEKDAYS_ONLY       optional, Standard: true (gilt nur mit ONLY_IN_WINDOW=true)
-  QUIET               optional, true = keine Incident-Titel ins Log schreiben
+  QUIET               optional, true = keine Incident-Titel ins Log und keine Kundendaten an ntfy
   WEB_PORT            optional, Standard: 8790 (Live-Ansicht, nur 127.0.0.1). 0 = aus
   PD_FROM_EMAIL       optional, nur fuer Account-Keys: E-Mail fuer den From-Header beim Ack
 """
@@ -596,11 +596,13 @@ def notify(incident, customer, loud=True):
     service = service_name(incident)
     topic = NTFY_TOPIC if loud else (NTFY_TOPIC_SILENT or NTFY_TOPIC)
     label = customer or service or "Alarm"
+    # ntfy-Topics sind oeffentlich lesbar: mit QUIET nur "Incident", Details in der Live-Ansicht
+    body = "Incident" if QUIET else f"{title}\nService: {service}"
     r = requests.post(
         f"{NTFY_SERVER}/{topic}",
-        data=f"{title}\nService: {service}".encode("utf-8"),
+        data=body.encode("utf-8"),
         headers={
-            "Title": f"PagerDuty: {label}".encode("utf-8"),
+            "Title": "Incident" if QUIET else f"PagerDuty: {label}".encode("utf-8"),
             "Priority": "urgent" if loud else "low",
             "Tags": "rotating_light" if loud else "information_source",
             "Click": url,                  # Tippen oeffnet den Incident

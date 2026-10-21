@@ -58,6 +58,7 @@ Alle Einstellungen und Details stehen in der [Anleitung](ANLEITUNG.md).
 - `config.env` (API-Key, ntfy-Topics) und `customers.txt` sind in `.gitignore` und
   gehören nicht ins Repo.
 - ntfy-Topics auf ntfy.sh sind öffentlich lesbar, wenn man den Namen kennt: einen
-  langen, zufälligen Namen wählen. Mit `QUIET=true` landen keine Incident-Titel im Log.
+  langen, zufälligen Namen wählen. Mit `QUIET=true` landen keine Incident-Titel im Log
+  und keine Kundendaten in den ntfy-Mitteilungen: dort steht dann nur „Incident“.
 - Die Live-Ansicht lauscht nur auf `127.0.0.1` und nimmt Aktionen nur von der eigenen
   Seite an.

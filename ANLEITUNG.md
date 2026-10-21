@@ -65,6 +65,10 @@ Unter **Einstellungen** (aufklappen) lassen sich ändern: leise Mitteilungen
 Abfrage-Intervall und `QUIET`. Das gilt sofort, ohne Neustart, und wird in
 `config.env` gespeichert. API-Key, ntfy-Topics und Port bleiben bewusst nur in der Datei.
 
+`QUIET=true` schreibt keine Incident-Titel ins Log und schickt keine Kundendaten an ntfy:
+Die Mitteilung lautet dann nur „Incident“ (laut oder leise wie sonst auch), die Details
+stehen in der Live-Ansicht. Tippen öffnet den Incident in PagerDuty.
+
 **Optional als Browser-Extension** (Chrome, Edge): `chrome://extensions` öffnen,
 oben rechts **Entwicklermodus** an, **Entpackte Erweiterung laden** und den Ordner
 `extension` auswählen. Ein Klick aufs Icon öffnet eine kompakte Ansicht (Status,
