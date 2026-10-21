@@ -106,6 +106,15 @@ und den Button **„Rest der Schicht an CSOC Dummy abgeben“**. Ein Klick legt 
 (Standard `CSOC Dummy`, Name oder E-Mail). Mit `ONLY_ON_CALL=true` pausiert der Filter
 danach automatisch.
 
+**LAS (Last Analyst Standing):** An Tagen, an denen du ab 16 Uhr alle Kunden übernimmst,
+klickst du in der Live-Ansicht (oder Mini-Ansicht) auf **„LAS an bis 18:00“**. Der Filter
+legt dann in PagerDuty für jedes Gerät mit PagerDuty-App eine Benachrichtigungsregel an
+(sofortiger Push, hohe und niedrige Dringlichkeit). Um `LAS_END_HOUR` (Standard 18 Uhr)
+löscht er sie automatisch wieder, auch wenn er zwischendurch aus war (dann beim nächsten
+Start). Vorher geht es mit **„LAS beenden“**. Es werden nur die selbst angelegten Regeln
+gelöscht (gemerkt in `las.json`). Ein neues Gerät zählt erst, wenn du dich dort in der
+PagerDuty-App angemeldet hast. Die ntfy-Mitteilungen bleiben während LAS unverändert.
+
 **Schicht zurückholen:** Solange ein selbst gesetzter Override läuft, zeigt die
 Live-Ansicht (und die Mini-Ansicht) den Button **„Schicht zurückholen“**, z. B. nach einer
 Pause. Er löscht den Override in PagerDuty wieder; läuft er schon, wird er auf jetzt
@@ -120,4 +129,4 @@ einen Neustart hinweg. Overrides, die direkt in PagerDuty angelegt wurden, kennt
 | `dashboard.html` | Live-Ansicht |
 | `config.env` | deine Einstellungen inkl. API-Key (**nicht weitergeben**) |
 | `customers.txt` | deine Kundenliste (nicht im Repo, Vorlage: `customers.txt.example`) |
-| `seen.json`, `overrides.json`, `pd_filter.log`, `pd_filter.pid` | werden automatisch angelegt |
+| `seen.json`, `overrides.json`, `las.json`, `pd_filter.log`, `pd_filter.pid` | werden automatisch angelegt |

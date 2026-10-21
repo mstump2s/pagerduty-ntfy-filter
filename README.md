@@ -30,6 +30,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
 - **Schicht abgeben:** Ein Button legt einen Override von jetzt bis Schichtende auf
   einen anderen User an (`OVERRIDE_USER`, z. B. ein Dummy-User). Nach einer Pause holt
   „Schicht zurückholen“ sie wieder zurück (löscht den Override).
+- **LAS (Last Analyst Standing):** Ein Button schaltet die PagerDuty-Push-Benachrichtigungen
+  bis 18 Uhr an (alle Kunden), danach entfernt der Filter sie automatisch wieder.
 - **Arbeitszeiten** (`ONLY_IN_WINDOW=true`): nur zu festen Zeiten aktiv.
 
 ## Schnellstart

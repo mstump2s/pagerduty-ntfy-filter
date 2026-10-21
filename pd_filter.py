@@ -36,6 +36,8 @@ oder Umgebungsvariablen (die haben Vorrang):
   START_HOUR          optional, Standard: 8
   END_HOUR            optional, Standard: 18
   WEEKDAYS_ONLY       optional, Standard: true (gilt nur mit ONLY_IN_WINDOW=true)
+  LAS_END_HOUR        optional, Standard: 18. Bis dahin laufen die PD-Benachrichtigungen nach Klick
+                      auf "LAS" (Last Analyst Standing), danach werden sie automatisch wieder entfernt
   QUIET               optional, true = keine Incident-Titel ins Log und keine Kundendaten an ntfy
   WEB_PORT            optional, Standard: 8790 (Live-Ansicht, nur 127.0.0.1). 0 = aus
   PD_FROM_EMAIL       optional, nur fuer Account-Keys: E-Mail fuer den From-Header beim Ack
@@ -50,7 +52,7 @@ import threading
 import time
 import unicodedata
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -61,6 +63,7 @@ BASE_DIR = Path(__file__).resolve().parent
 CUSTOMERS_FILE = BASE_DIR / "customers.txt"
 SEEN_FILE = BASE_DIR / "seen.json"
 OVERRIDES_FILE = BASE_DIR / "overrides.json"
+LAS_FILE = BASE_DIR / "las.json"
 CONFIG_FILE = BASE_DIR / "config.env"
 
 
@@ -99,6 +102,7 @@ WEEKDAYS_ONLY = env_bool("WEEKDAYS_ONLY", True)
 ONLY_IN_WINDOW = env_bool("ONLY_IN_WINDOW", False)
 ONLY_ON_CALL = env_bool("ONLY_ON_CALL", False)
 OVERRIDE_USER = os.environ.get("OVERRIDE_USER", "CSOC Dummy").strip()
+LAS_END_HOUR = int(os.environ.get("LAS_END_HOUR", "18"))
 QUIET = env_bool("QUIET", False)
 WEB_PORT = int(os.environ.get("WEB_PORT", "8790") or 0)   # 0 = Live-Ansicht aus
 PD_FROM_EMAIL = os.environ.get("PD_FROM_EMAIL", "").strip()
@@ -122,6 +126,7 @@ STATE = {
     "shift": None,              # aktuelle Schicht: {"schedules": [...], "end": ISO-Zeit}
     "override_user": OVERRIDE_USER,
     "overrides": [],            # von mir gesetzte, noch laufende Overrides: [{"schedule", "end", ...}]
+    "las": None,                # LAS aktiv: {"until": ISO-Zeit}
     "customers_editable": not os.environ.get("CUSTOMERS", "").strip(),
 }
 EVENTS = deque(maxlen=300)      # Verlauf (neueste zuerst)
@@ -194,6 +199,7 @@ EDITABLE = {
     "SERVICE_FILTER": str,
     "ONLY_ON_CALL": bool,
     "OVERRIDE_USER": str,
+    "LAS_END_HOUR": int,
     "ONLY_IN_WINDOW": bool,
     "START_HOUR": int,
     "END_HOUR": int,
@@ -513,6 +519,102 @@ def take_back_shift():
     return None, "Schicht zurueckgeholt: " + ", ".join(done)
 
 
+# ---------- LAS (Last Analyst Standing): PD-Benachrichtigungen voruebergehend an ----------
+
+def load_las():
+    try:
+        return json.loads(LAS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def save_las(las):
+    if las:
+        LAS_FILE.write_text(json.dumps(las), encoding="utf-8")
+    else:
+        LAS_FILE.unlink(missing_ok=True)
+    with STATE_LOCK:
+        STATE["las"] = {"until": las["until"]} if las else None
+
+
+def start_las():
+    """Bis LAS_END_HOUR fuer jedes Push-Geraet eine PD-Benachrichtigungsregel anlegen
+    (hohe und niedrige Dringlichkeit). Liefert (Fehlertext oder None, Beschreibung)."""
+    if load_las():
+        return "LAS ist schon an", ""
+    now = datetime.now(TZ)
+    until = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=LAS_END_HOUR)
+    if until <= now:
+        return f"LAS-Ende {LAS_END_HOUR}:00 Uhr ist heute schon vorbei", ""
+    if MY_USER_ID is None:
+        find_my_user_id()
+    if not MY_USER_ID:
+        return "Eigener PagerDuty-User unbekannt (bei Account-Key PD_FROM_EMAIL setzen)", ""
+    base = f"{PD_API}/users/{MY_USER_ID}"
+    headers = pd_write_headers()
+    rules = []
+    try:
+        r = requests.get(f"{base}/contact_methods", headers=PD_HEADERS, timeout=20)
+        r.raise_for_status()
+        devices = [c for c in r.json().get("contact_methods", [])
+                   if c["type"] == "push_notification_contact_method"]
+        if not devices:
+            return "Kein Geraet fuer PagerDuty-Push registriert (PagerDuty-App anmelden)", ""
+        for c in devices:
+            for urgency in ("high", "low"):
+                r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
+                    "notification_rule": {
+                        "type": "assignment_notification_rule", "start_delay_in_minutes": 0,
+                        "urgency": urgency,
+                        "contact_method": {"id": c["id"], "type": "push_notification_contact_method_reference"},
+                    }})
+                if not r.ok:
+                    raise RuntimeError(f"{c.get('summary', c['id'])}: {pd_error_text(r)}")
+                rules.append(r.json()["notification_rule"]["id"])
+    except (requests.RequestException, KeyError, ValueError, RuntimeError) as e:
+        # Halb angelegte Regeln nicht stehen lassen
+        save_las({"until": until.isoformat(), "rules": rules})
+        stop_las()
+        return f"PagerDuty-Fehler: {e}", ""
+    save_las({"until": until.isoformat(), "rules": rules})
+    names = ", ".join(c.get("summary", "") for c in devices)
+    return None, f"LAS an bis {until:%H:%M}: PagerDuty-Push auf {names}"
+
+
+def stop_las():
+    """Die fuer LAS angelegten Benachrichtigungsregeln wieder loeschen.
+    Liefert (Fehlertext oder None, Beschreibung)."""
+    las = load_las()
+    if not las:
+        return "LAS ist nicht an", ""
+    headers = pd_write_headers()
+    try:
+        for rule_id in list(las["rules"]):
+            r = requests.delete(f"{PD_API}/users/{MY_USER_ID}/notification_rules/{rule_id}",
+                                headers=headers, timeout=20)
+            if not r.ok and r.status_code != 404:   # 404: in PagerDuty schon geloescht
+                save_las(las)
+                return f"Regel {rule_id}: {pd_error_text(r)}", ""
+            las["rules"].remove(rule_id)
+    except requests.RequestException as e:
+        save_las(las)
+        return f"PagerDuty-Fehler: {e}", ""
+    save_las(None)
+    return None, "LAS aus: PagerDuty-Benachrichtigungen wieder entfernt"
+
+
+def end_las_if_due():
+    """Um LAS_END_HOUR (bzw. beim naechsten Start danach) automatisch ausschalten."""
+    las = load_las()
+    if not las or parse_time(las["until"]) > datetime.now(TZ):
+        return
+    if MY_USER_ID is None:
+        find_my_user_id()
+    err, text = stop_las()
+    log(f"LAS automatisch beenden fehlgeschlagen, neuer Versuch spaeter: {err}" if err else text)
+    add_event("error" if err else "info", err or text)
+
+
 def fetch_my_acked(customers):
     """Acknowledged Incidents, die ich acknowledged habe (ohne bekannte User-ID: alle)."""
     acked = []
@@ -694,6 +796,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 STATE["shift"] = None
             return self._json(200, {"ok": True, "text": text})
+        if self.path in ("/api/las/start", "/api/las/stop"):
+            err, text = start_las() if self.path.endswith("start") else stop_las()
+            if err:
+                log(f"LAS: {err}")
+                add_event("error", f"LAS: {err}")
+                return self._json(502, {"error": err})
+            log(text)
+            add_event("info", text)
+            return self._json(200, {"ok": True, "text": text})
         if self.path == "/api/override/remove":
             err, text = take_back_shift()
             if err:
@@ -867,11 +978,14 @@ def main():
         STATE["started"] = now_str()
         STATE["settings"] = current_settings()
         STATE["overrides"] = load_overrides()
+        las = load_las()
+        STATE["las"] = {"until": las["until"]} if las else None
     add_event("info", "Filter eingeschaltet")
     start_dashboard()
 
     paused = None
     while True:
+        end_las_if_due()
         # Ausserhalb Zeitfenster / ohne Schedule pausieren statt beenden, damit es "an" bleibt
         if not in_time_window():
             reason = "außerhalb Zeitfenster"
