@@ -816,6 +816,9 @@ def main():
             with STATE_LOCK:
                 STATE["paused"] = reason
         if reason:
+            # Kundenliste auch in der Pause aktuell halten, sonst bleibt die Live-Ansicht leer
+            with STATE_LOCK:
+                STATE["customers"] = load_customers()
             time.sleep(60)
             continue
 
