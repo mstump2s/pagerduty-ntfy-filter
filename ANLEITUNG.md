@@ -62,11 +62,12 @@ acknowledged Incidents angezeigt.
 
 Unter **Einstellungen** (aufklappen) lassen sich ändern: leise Mitteilungen
 (`SILENT_FOR`), Service-Filter, „nur im Schedule“, Override-User, Zeitfenster,
-Abfrage-Intervall und `QUIET`. Das gilt sofort, ohne Neustart, und wird in
+Abfrage-Intervall und die Auswahl für LAS/Schicht. Das gilt sofort, ohne Neustart, und wird in
 `config.env` gespeichert. API-Key, ntfy-Topics und Port bleiben bewusst nur in der Datei.
 
-`QUIET=true` schreibt keine Incident-Titel ins Log und schickt keine Kundendaten an ntfy:
-Die Mitteilung lautet dann nur „Incident“ (laut oder leise wie sonst auch), die Details
+Datenschutz (`QUIET`) ist immer an und lässt sich weder in der Live-Ansicht noch in
+`config.env` abschalten: Es landen keine Incident-Titel im Log und keine Kundendaten bei ntfy.
+Die Mitteilung lautet nur „Incident“ (laut oder leise wie sonst auch), die Details
 stehen in der Live-Ansicht. Tippen öffnet den Incident in PagerDuty.
 
 **Optional als Browser-Extension** (Chrome, Edge): `chrome://extensions` öffnen,
@@ -112,7 +113,12 @@ sorgt dann in PagerDuty für jedes Gerät mit PagerDuty-App für eine Push-Regel
 Dringlichkeit); schon vorhandene Push-Regeln übernimmt er, statt doppelte anzulegen. Um
 `LAS_END_HOUR` (Standard 18 Uhr) löscht er diese Push-Regeln wieder, auch wenn er
 zwischendurch aus war (dann beim nächsten Start). Vorher geht es mit **„LAS beenden“**.
-Andere Regeln, z. B. ein Anruf nach 5 Minuten, bleiben immer unangetastet. Die Regeln merkt
+Andere Regeln, z. B. ein Anruf nach 5 Minuten, bleiben immer unangetastet.
+
+Unter **Einstellungen** wählst du, welche Kontakte LAS/Schicht anschaltet (Geräte mit
+PagerDuty-App, SMS, Anruf, E-Mail; `LAS_CONTACTS`, nichts gewählt = alle Push-Geräte) und für
+welche Dringlichkeit (`LAS_URGENCY`: hoch, niedrig oder beide). Gibt es für SMS, Anruf oder
+E-Mail schon eine passende Regel, bleibt sie einfach stehen und wird beim Beenden nicht gelöscht. Die Regeln merkt
 er sich in `las.json`. Ein neues Gerät zählt erst, wenn du dich dort in der PagerDuty-App
 angemeldet hast. Die ntfy-Mitteilungen bleiben während LAS unverändert.
 

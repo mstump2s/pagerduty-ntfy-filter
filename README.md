@@ -32,7 +32,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   „Schicht zurückholen“ sie wieder zurück (löscht den Override).
 - **LAS (Last Analyst Standing):** Ein Button schaltet die PagerDuty-Push-Benachrichtigungen
   bis 18 Uhr an (alle Kunden), danach entfernt der Filter sie automatisch wieder. „Schicht“
-  schaltet sie ohne Endzeit an, bis du sie selbst wieder ausschaltest.
+  schaltet sie ohne Endzeit an, bis du sie selbst wieder ausschaltest. In den Einstellungen
+  wählst du, welche Kontakte (Push, SMS, Anruf, E-Mail) und welche Dringlichkeit.
 - **Arbeitszeiten** (`ONLY_IN_WINDOW=true`): nur zu festen Zeiten aktiv.
 
 ## Schnellstart
@@ -61,7 +62,7 @@ Alle Einstellungen und Details stehen in der [Anleitung](ANLEITUNG.md).
 - `config.env` (API-Key, ntfy-Topics) und `customers.txt` sind in `.gitignore` und
   gehören nicht ins Repo.
 - ntfy-Topics auf ntfy.sh sind öffentlich lesbar, wenn man den Namen kennt: einen
-  langen, zufälligen Namen wählen. Mit `QUIET=true` landen keine Incident-Titel im Log
-  und keine Kundendaten in den ntfy-Mitteilungen: dort steht dann nur „Incident“.
+  langen, zufälligen Namen wählen. Datenschutz (`QUIET`) ist fest an: Es landen keine
+  Incident-Titel im Log und keine Kundendaten in den ntfy-Mitteilungen, dort steht nur „Incident“.
 - Die Live-Ansicht lauscht nur auf `127.0.0.1` und nimmt Aktionen nur von der eigenen
   Seite an.

@@ -78,6 +78,9 @@
     font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line);
     background: var(--panel); color: var(--text); }
   .settings input[type=number] { width: 90px; }
+  .settings fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0;
+    display: grid; gap: 6px; }
+  .settings legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   .add-customer input { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px; width: 150px;
                         border: 1px solid var(--line); background: var(--panel); color: var(--text); }
   .wrap { overflow-x: auto; }
@@ -148,6 +151,18 @@
       <label>LAS (PagerDuty-Push an) bis (Uhr)
         <input type="number" name="LAS_END_HOUR" min="0" max="24">
       </label>
+      <label>LAS/Schicht schaltet PagerDuty für diese Dringlichkeit an
+        <select name="LAS_URGENCY">
+          <option value="hoch">hoch</option>
+          <option value="niedrig">niedrig</option>
+          <option value="beide">hoch und niedrig</option>
+        </select>
+      </label>
+      <fieldset class="contacts">
+        <legend>LAS/Schicht benachrichtigt über (nichts gewählt = alle Geräte mit PagerDuty-App)</legend>
+        <input type="hidden" name="LAS_CONTACTS">
+        <div id="contactList" class="svc">lädt…</div>
+      </fieldset>
       <label class="check"><input type="checkbox" name="ONLY_IN_WINDOW"> Nur im Zeitfenster aktiv</label>
       <div class="row">
         <label>von (Uhr) <input type="number" name="START_HOUR" min="0" max="24"></label>
@@ -155,7 +170,7 @@
         <label class="check"><input type="checkbox" name="WEEKDAYS_ONLY"> nur Mo–Fr</label>
       </div>
       <label>Abfrage alle (Sekunden) <input type="number" name="POLL_SECONDS" min="5" max="3600"></label>
-      <label class="check"><input type="checkbox" name="QUIET"> Keine Incident-Titel ins Log, keine Kundendaten an ntfy</label>
+      <span class="svc">Datenschutz ist immer an: keine Incident-Titel ins Log, keine Kundendaten an ntfy.</span>
       <div class="row">
         <button class="ack" type="submit">Speichern</button>
         <span class="svc">Gilt sofort, wird in config.env gespeichert.</span>
@@ -377,13 +392,40 @@
       if (el.type === "checkbox") el.checked = value;
       else el.value = value;
     }
+    markContacts();
   }
+  // Auswahl der PagerDuty-Kontakte fuer LAS/Schicht, gespeichert als IDs in LAS_CONTACTS
+  const contactsInput = settingsForm.elements.LAS_CONTACTS;
+  const contactList = document.getElementById("contactList");
+  function markContacts() {
+    const ids = contactsInput.value.split(",").filter(Boolean);
+    contactList.querySelectorAll("input[data-contact]").forEach(cb => { cb.checked = ids.includes(cb.dataset.contact); });
+  }
+  async function loadContacts() {
+    try {
+      const r = await fetch("/api/contacts", { cache: "no-store" });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.error || "HTTP " + r.status);
+      contactList.classList.toggle("svc", !res.contacts.length);
+      contactList.innerHTML = res.contacts.map(c => `<label class="check"><input type="checkbox" data-contact="${esc(c.id)}">
+        ${esc(c.kind)}: ${esc(c.label)}${c.address && c.kind !== "Push" ? ` (${esc(c.address)})` : ""}</label>`).join("")
+        || "Keine Kontakte in PagerDuty gefunden";
+      markContacts();
+    } catch (e) {
+      contactList.textContent = "Kontakte nicht geladen: " + e.message;
+    }
+  }
+  contactList.addEventListener("change", () => {
+    contactsInput.value = [...contactList.querySelectorAll("input[data-contact]:checked")]
+      .map(cb => cb.dataset.contact).join(",");
+  });
+  document.getElementById("settingsBox").addEventListener("toggle", ev => { if (ev.target.open) loadContacts(); });
   settingsForm.addEventListener("input", () => { settingsDirty = true; });
   settingsForm.addEventListener("submit", async ev => {
     ev.preventDefault();
     const body = {};
     for (const el of settingsForm.elements) {
-      if (!el.name) continue;
+      if (!el.name || el.tagName === "FIELDSET") continue;
       body[el.name] = el.type === "checkbox" ? el.checked : el.value;
     }
     const btn = settingsForm.querySelector("button[type=submit]");

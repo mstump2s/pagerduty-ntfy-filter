@@ -38,7 +38,10 @@ oder Umgebungsvariablen (die haben Vorrang):
   WEEKDAYS_ONLY       optional, Standard: true (gilt nur mit ONLY_IN_WINDOW=true)
   LAS_END_HOUR        optional, Standard: 18. Bis dahin laufen die PD-Benachrichtigungen nach Klick
                       auf "LAS" (Last Analyst Standing), danach werden sie automatisch wieder entfernt
-  QUIET               optional, true = keine Incident-Titel ins Log und keine Kundendaten an ntfy
+  LAS_CONTACTS        optional, kommagetrennte IDs der PagerDuty-Kontakte (Geraete, SMS, Anruf, E-Mail),
+                      die LAS/Schicht anschalten. Leer = alle Geraete mit PagerDuty-App (Push)
+  LAS_URGENCY         optional, Standard: hoch. Fuer welche Dringlichkeit: hoch | niedrig | beide
+Datenschutz ist fest an (QUIET): keine Incident-Titel ins Log, keine Kundendaten an ntfy.
   WEB_PORT            optional, Standard: 8790 (Live-Ansicht, nur 127.0.0.1). 0 = aus
   PD_FROM_EMAIL       optional, nur fuer Account-Keys: E-Mail fuer den From-Header beim Ack
 """
@@ -103,7 +106,11 @@ ONLY_IN_WINDOW = env_bool("ONLY_IN_WINDOW", False)
 ONLY_ON_CALL = env_bool("ONLY_ON_CALL", False)
 OVERRIDE_USER = os.environ.get("OVERRIDE_USER", "CSOC Dummy").strip()
 LAS_END_HOUR = int(os.environ.get("LAS_END_HOUR", "18"))
-QUIET = env_bool("QUIET", False)
+LAS_CONTACTS = ",".join(s.strip() for s in os.environ.get("LAS_CONTACTS", "").split(",") if s.strip())
+LAS_URGENCY = os.environ.get("LAS_URGENCY", "hoch").strip().lower()
+if LAS_URGENCY not in ("hoch", "niedrig", "beide"):
+    LAS_URGENCY = "hoch"
+QUIET = True   # immer an, nicht per config.env oder Live-Ansicht abschaltbar
 WEB_PORT = int(os.environ.get("WEB_PORT", "8790") or 0)   # 0 = Live-Ansicht aus
 PD_FROM_EMAIL = os.environ.get("PD_FROM_EMAIL", "").strip()
 PD_API = "https://api.pagerduty.com"
@@ -200,12 +207,13 @@ EDITABLE = {
     "ONLY_ON_CALL": bool,
     "OVERRIDE_USER": str,
     "LAS_END_HOUR": int,
+    "LAS_CONTACTS": str,
+    "LAS_URGENCY": ("hoch", "niedrig", "beide"),
     "ONLY_IN_WINDOW": bool,
     "START_HOUR": int,
     "END_HOUR": int,
     "WEEKDAYS_ONLY": bool,
     "POLL_SECONDS": int,
-    "QUIET": bool,
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -238,6 +246,11 @@ def parse_setting(key, value):
     if key == "SERVICE_FILTER":
         parts = [s.strip() for s in text.split(";") if s.strip()]
         return [s.lower() for s in parts], ";".join(parts)
+    if key == "LAS_CONTACTS":
+        ids = [s.strip() for s in text.split(",") if s.strip()]
+        if not all(ID_RE.match(i) for i in ids):
+            raise ValueError("ungueltige Kontakt-ID")
+        return ",".join(ids), ",".join(ids)
     return text, text
 
 
@@ -541,10 +554,40 @@ def las_view(las):
     return {"mode": las.get("mode", "las"), "until": las["until"]} if las else None
 
 
+CONTACT_TYPES = {
+    "push_notification_contact_method": "Push",
+    "sms_contact_method": "SMS",
+    "phone_contact_method": "Anruf",
+    "email_contact_method": "E-Mail",
+}
+URGENCY_TEXT = {"hoch": "hohe Dringlichkeit", "niedrig": "niedrige Dringlichkeit",
+                "beide": "hohe und niedrige Dringlichkeit"}
+
+
+def fetch_contacts():
+    """Meine PagerDuty-Kontakte (Geraete, SMS, Anruf, E-Mail) fuer die Auswahl in der Live-Ansicht.
+    Liefert (Fehlertext oder None, Liste)."""
+    if MY_USER_ID is None:
+        find_my_user_id()
+    if not MY_USER_ID:
+        return "Eigener PagerDuty-User unbekannt (bei Account-Key PD_FROM_EMAIL setzen)", []
+    try:
+        r = requests.get(f"{PD_API}/users/{MY_USER_ID}/contact_methods", headers=PD_HEADERS, timeout=20)
+        r.raise_for_status()
+        contacts = r.json().get("contact_methods", [])
+    except (requests.RequestException, ValueError) as e:
+        return f"PagerDuty-Fehler: {e}", []
+    return None, [{"id": c["id"], "kind": CONTACT_TYPES[c["type"]],
+                   "label": c.get("label") or c.get("summary") or "", "address": c.get("address", "")}
+                  for c in contacts if c.get("type") in CONTACT_TYPES]
+
+
 def start_las(mode="las"):
-    """Fuer jedes Push-Geraet eine PD-Benachrichtigungsregel (sofort, hohe Dringlichkeit)
-    sicherstellen: bei "las" bis LAS_END_HOUR, bei "schicht" bis zum Ausschalten per Hand. Schon vorhandene Push-Regeln werden uebernommen, damit es keine
-    doppelten gibt, und am Ende mit entfernt. Andere Regeln (z. B. Anruf) bleiben unangetastet.
+    """Fuer die ausgewaehlten Kontakte (LAS_CONTACTS, leer = alle Push-Geraete) eine
+    PD-Benachrichtigungsregel (sofort, Dringlichkeit laut LAS_URGENCY) sicherstellen: bei "las"
+    bis LAS_END_HOUR, bei "schicht" bis zum Ausschalten per Hand. Schon vorhandene Push-Regeln
+    werden uebernommen, damit es keine doppelten gibt, und am Ende mit entfernt. Schon vorhandene
+    Regeln fuer SMS, Anruf oder E-Mail bleiben stehen, auch nach dem Beenden.
     Liefert (Fehlertext oder None, Beschreibung)."""
     if load_las():
         return "PagerDuty-Push ist schon an (LAS oder Schicht)", ""
@@ -565,34 +608,43 @@ def start_las(mode="las"):
     try:
         r = requests.get(f"{base}/contact_methods", headers=PD_HEADERS, timeout=20)
         r.raise_for_status()
-        devices = [c for c in r.json().get("contact_methods", [])
-                   if c["type"] == "push_notification_contact_method"]
+        contacts = [c for c in r.json().get("contact_methods", []) if c.get("type") in CONTACT_TYPES]
+        wanted = set(LAS_CONTACTS.split(",")) if LAS_CONTACTS else None
+        devices = [c for c in contacts if c["id"] in wanted] if wanted else \
+            [c for c in contacts if c["type"] == "push_notification_contact_method"]
         if not devices:
-            return "Kein Geraet fuer PagerDuty-Push registriert (PagerDuty-App anmelden)", ""
+            return ("Keiner der ausgewaehlten Kontakte existiert noch in PagerDuty (Einstellungen pruefen)"
+                    if wanted else "Kein Geraet fuer PagerDuty-Push registriert (PagerDuty-App anmelden)"), ""
+        urgencies = {"hoch": ["high"], "niedrig": ["low"], "beide": ["high", "low"]}[LAS_URGENCY]
         r = requests.get(f"{base}/notification_rules", headers=PD_HEADERS, timeout=20)
         r.raise_for_status()
-        existing = {n["contact_method"]["id"]: n["id"] for n in r.json().get("notification_rules", [])
-                    if n.get("urgency") == "high" and n["contact_method"].get("id") in {c["id"] for c in devices}}
+        existing = {(n["contact_method"].get("id"), n.get("urgency")): n["id"]
+                    for n in r.json().get("notification_rules", [])}
+        adopted = []
         for c in devices:
-            if c["id"] in existing:
-                continue
-            r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
-                "notification_rule": {
-                    "type": "assignment_notification_rule", "start_delay_in_minutes": 0, "urgency": "high",
-                    "contact_method": {"id": c["id"], "type": "push_notification_contact_method"},
-                }})
-            if not r.ok:
-                raise RuntimeError(f"{c.get('summary', c['id'])}: {pd_error_text(r)}")
-            created.append(r.json()["notification_rule"]["id"])
+            for urgency in urgencies:
+                if (c["id"], urgency) in existing:
+                    # Nur Push-Regeln uebernehmen, Anruf/SMS/E-Mail-Regeln nie loeschen
+                    if c["type"] == "push_notification_contact_method":
+                        adopted.append(existing[(c["id"], urgency)])
+                    continue
+                r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
+                    "notification_rule": {
+                        "type": "assignment_notification_rule", "start_delay_in_minutes": 0, "urgency": urgency,
+                        "contact_method": {"id": c["id"], "type": c["type"]},
+                    }})
+                if not r.ok:
+                    raise RuntimeError(f"{c.get('summary', c['id'])}: {pd_error_text(r)}")
+                created.append(r.json()["notification_rule"]["id"])
     except (requests.RequestException, KeyError, ValueError, RuntimeError) as e:
         # Halb angelegte Regeln nicht stehen lassen (vorhandene bleiben)
         save_las({"mode": mode, "until": until_text, "rules": created})
         stop_las()
         return f"PagerDuty-Fehler: {e}", ""
-    save_las({"mode": mode, "until": until_text, "rules": created + list(existing.values())})
-    names = ", ".join(c.get("summary", "") for c in devices)
+    save_las({"mode": mode, "until": until_text, "rules": created + adopted})
+    names = ", ".join(f"{CONTACT_TYPES[c['type']]} {c.get('summary', '')}".strip() for c in devices)
     what = f"LAS an bis {until:%H:%M}" if until else "Schicht an"
-    return None, f"{what}: PagerDuty-Push auf {names}"
+    return None, f"{what}: PagerDuty ({URGENCY_TEXT[LAS_URGENCY]}) auf {names}"
 
 
 def stop_las():
@@ -615,7 +667,7 @@ def stop_las():
         return f"PagerDuty-Fehler: {e}", ""
     save_las(None)
     what = "Schicht" if las.get("mode") == "schicht" else "LAS"
-    return None, f"{what} aus: PagerDuty-Push-Regeln entfernt"
+    return None, f"{what} aus: PagerDuty-Regeln entfernt"
 
 
 def end_las_if_due():
@@ -790,6 +842,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 return self._send(404, f"{pages[self.path].name} fehlt".encode(), "text/plain; charset=utf-8")
             return self._send(200, body, "text/html; charset=utf-8")
+        if self.path == "/api/contacts":
+            err, contacts = fetch_contacts()
+            return self._json(502, {"error": err}) if err else self._json(200, {"contacts": contacts})
         if self.path == "/api/state":
             with STATE_LOCK:
                 data = dict(STATE, events=list(EVENTS))
