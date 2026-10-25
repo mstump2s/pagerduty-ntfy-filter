@@ -386,7 +386,7 @@ def find_my_user_id():
             "(bei Account-Key PD_FROM_EMAIL setzen).")
 
 
-_ON_CALL_CACHE = {"at": 0.0, "value": True}
+_ON_CALL_CACHE = {"at": 0.0, "value": True, "known": False}
 
 
 def fetch_my_shifts():
@@ -400,9 +400,10 @@ def fetch_my_shifts():
 
 def on_call_now():
     """True, wenn ich gerade in einem Schedule on-call bin (hoechstens einmal pro Minute gefragt).
-    Aktualisiert nebenbei die Schicht-Anzeige. Kann das nicht geprueft werden (User unbekannt,
-    PagerDuty nicht erreichbar), lieber weiterlaufen als Alarme verpassen."""
-    if time.monotonic() - _ON_CALL_CACHE["at"] < 60:
+    Aktualisiert nebenbei die Schicht-Anzeige. Ist PagerDuty nicht erreichbar (z. B. direkt nach
+    dem Aufwachen des Rechners), gilt der letzte bekannte Status; nur ohne den lieber weiterlaufen
+    als Alarme verpassen. Wanduhr statt monotonic: die steht auf macOS im Ruhezustand still."""
+    if abs(time.time() - _ON_CALL_CACHE["at"]) < 60:
         return _ON_CALL_CACHE["value"]
     if MY_USER_ID is None:
         find_my_user_id()
@@ -414,10 +415,15 @@ def on_call_now():
         try:
             shifts = fetch_my_shifts()
             value = bool(shifts)
+            _ON_CALL_CACHE["known"] = True
         except (requests.RequestException, KeyError, ValueError) as e:
+            if _ON_CALL_CACHE["known"]:
+                log(f"On-Call-Status nicht abrufbar, behalte letzten Stand: {e}")
+                _ON_CALL_CACHE["at"] = time.time()
+                return _ON_CALL_CACHE["value"]
             log(f"On-Call-Status nicht abrufbar, laufe weiter: {e}")
             value = True
-    _ON_CALL_CACHE.update(at=time.monotonic(), value=value)
+    _ON_CALL_CACHE.update(at=time.time(), value=value)
     ends = [s["end"] for s in shifts.values() if s["end"]]
     with STATE_LOCK:
         STATE["overrides"] = load_overrides()
