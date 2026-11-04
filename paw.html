@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAW Exchange</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #69727d; --line: #e3e6ea;
+    --ok: #1e8e3e; --err: #d93025; --info: #3367d6; --warn: #8a6d00; --warn-bg: #fff6d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #8b949e; --line: #2a3038;
+      --ok: #4cc26f; --err: #ff6b5e; --info: #7aa2ff; --warn: #e5c45a; --warn-bg: #332c12;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+       margin: 28px 0 10px; font-weight: 600; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 20%, transparent); }
+  .dot.err { background: var(--err); }
+  .meta { color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  a { color: var(--info); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .empty { padding: 18px; color: var(--muted); text-align: center; }
+  .error { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); border-radius: 8px;
+           padding: 10px 14px; margin-top: 14px; white-space: pre-wrap; }
+  .uploads { display: grid; gap: 12px; }
+  .upload { padding: 14px 16px; display: grid; gap: 10px; }
+  .upload.new { box-shadow: inset 3px 0 0 var(--info); }
+  .u-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .u-head strong { font-size: 15px; overflow-wrap: anywhere; }
+  .u-head .when { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .b-new { background: color-mix(in srgb, var(--info) 15%, transparent); color: var(--info); }
+  .b-run { background: var(--warn-bg); color: var(--warn); }
+  .b-done { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .b-err { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+  .files { display: flex; flex-wrap: wrap; gap: 6px; }
+  .file { background: color-mix(in srgb, var(--panel) 85%, var(--line)); border-radius: 6px; padding: 1px 8px; font-size: 12px;
+          overflow-wrap: anywhere; }
+  .file span { color: var(--muted); }
+  .instr { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid var(--line); padding: 2px 0 2px 10px; }
+  .instr.none { color: var(--muted); font-style: italic; }
+  .note { font: inherit; font-size: 13px; width: 100%; min-height: 54px; resize: vertical; padding: 6px 8px; border-radius: 6px;
+          border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+         border: 1px solid var(--line); background: var(--panel); color: var(--text); white-space: nowrap; }
+  .btn:hover { border-color: var(--info); color: var(--info); }
+  .btn.primary { background: var(--info); border-color: var(--info); color: #fff; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); color: #fff; }
+  .btn.danger:hover, .btn.armed { border-color: var(--err); color: var(--err); }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .auto { color: var(--warn); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .link-btn { font: inherit; font-size: 13px; border: 0; background: none; color: var(--info); cursor: pointer; padding: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: color-mix(in srgb, var(--panel) 92%, var(--line)); }
+  tr:last-child td { border-bottom: 0; }
+  td.time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; width: 1%; }
+  th.num, td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 1%; }
+  .h-sum { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
+  .b-cost { background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--muted); }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: calc(100% - 32px);
+           padding: 10px 16px; border-radius: 8px; color: #fff; background: var(--ok); font-weight: 600;
+           box-shadow: 0 4px 16px rgba(0,0,0,.2); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  #toast.show { opacity: 1; }
+  #toast.err { background: var(--err); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>PAW Exchange</h1>
+    <div class="right">
+      <a href="/">← PagerDuty-Filter</a>
+      <button class="btn" id="refresh" type="button">Neu laden</button>
+    </div>
+  </header>
+  <div class="meta">
+    <span>Zuletzt geholt: <b id="updated">–</b></span>
+    <span>Analyse läuft mit: <b>Claude Enterprise (~/.claude-work)</b>, Sonnet · Boost: Opus</span>
+  </div>
+  <div class="error" id="error" hidden></div>
+
+  <h2>Wartende Uploads vom PAW</h2>
+  <div class="uploads" id="uploads"><div class="card empty">lade…</div></div>
+
+  <h2>Ergebnisse auf dem PAW</h2>
+  <div class="card"><table>
+    <thead><tr><th>Gesendet</th><th>Batch</th><th>Zu Upload</th><th class="num">Kosten</th></tr></thead>
+    <tbody id="results"><tr><td colspan="4" class="empty">–</td></tr></tbody>
+  </table></div>
+
+  <h2>Kosten pro Analyse-Lauf <span class="h-sum" id="cost-sum"></span></h2>
+  <div class="card"><table>
+    <thead><tr><th>Zuletzt aktiv</th><th>Upload</th><th>Batch</th><th>Modell</th><th class="num">Cache Read</th><th class="num">Kosten</th></tr></thead>
+    <tbody id="costs"><tr><td colspan="6" class="empty">–</td></tr></tbody>
+  </table></div>
+  <div class="meta">Laut ccusage (Listenpreise, --offline). Ein Lauf = eine Claude-Sitzung im PAW-Ordner; Nachfragen im selben Chat zählen mit.</div>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const notes = {};            // Upload-ID -> Text der Zusatzhinweise (bleibt beim Neuzeichnen erhalten)
+  let data = null, busy = false;
+  // Der automatische Start laeuft im pd-filter-Dienst (auch ohne offene Seite); hier nur Countdown anzeigen
+  let autoAt = {};             // Upload-ID -> Zeitpunkt (ms), zu dem der Dienst die Analyse startet
+
+  function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+  function usd(n) { return "$" + (n || 0).toFixed(2); }
+  function mtok(n) { return n >= 1e6 ? (n / 1e6).toFixed(2) + " M" : Math.round((n || 0) / 1e3) + " k"; }
+  function size(n) { if (n < 1024) return n + " B"; const u = ["KB", "MB", "GB"]; let i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < 2); return n.toFixed(1) + " " + u[i]; }
+  function when(v) {
+    const d = typeof v === "number" ? new Date(v * 1000) : new Date(v);
+    if (isNaN(d)) return "";
+    const today = new Date().toDateString() === d.toDateString();
+    return (today ? "heute" : d.toLocaleDateString("de-DE")) + ", " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  }
+  // Upload-IDs sind lokale Zeit YYYY-MM-DD_HHMMSS
+  function idTime(id) { const m = id.match(/^(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)$/); return m ? new Date(m[1], m[2] - 1, m[3], m[4], m[5], m[6]) : null; }
+
+  let toastTimer;
+  function toast(text, err) {
+    const t = $("toast"); t.textContent = text; t.className = "show" + (err ? " err" : "");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = "", 3500);
+  }
+
+  async function load(force) {
+    try {
+      const r = await fetch("/api/paw" + (force ? "?refresh=1" : ""), { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status === 404 ? "PAW Exchange ist nicht eingerichtet (analyze.sh fehlt)" : "HTTP " + r.status);
+      data = await r.json();
+      autoAt = Object.fromEntries(Object.entries(data.auto || {}).map(([k, v]) => [k, v * 1000]));
+      render();
+    } catch (e) {
+      $("dot").className = "dot err";
+      $("error").hidden = false; $("error").textContent = "Live-Ansicht nicht erreichbar: " + e.message;
+    }
+  }
+
+  function render() {
+    $("dot").className = "dot " + (data.error ? "err" : "on");
+    $("error").hidden = !data.error; $("error").textContent = data.error || "";
+    $("updated").textContent = when(data.updated);
+    const resultsFor = id => data.results.filter(r => r.inbox === id);
+    const runs = data.costs || [];
+    const costFor = id => { const rs = runs.filter(c => c.id === id); return rs.length ? rs.reduce((n, c) => n + c.cost, 0) : null; };
+    const batchFor = id => (data.uploads.find(u => u.id === id) || data.results.find(r => r.inbox === id && r.batch) || {}).batch || "";
+
+    const box = $("uploads");
+    // Beim Tippen nicht neu zeichnen, sonst springt der Cursor
+    const typing = box.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA";
+    if (!typing && !data.uploads.length) {
+      box.innerHTML = '<div class="card empty">Keine wartenden Uploads. Neue erscheinen hier, sobald sie auf dem PAW hochgeladen sind.</div>';
+    } else if (!typing) {
+      box.innerHTML = data.uploads.map(u => {
+        const res = resultsFor(u.id), started = data.started[u.id];
+        let badge = '<span class="badge b-new">Neu</span>';
+        if (u.error) badge = '<span class="badge b-err">' + esc(u.error) + '</span>';
+        else if (res.length) badge = '<span class="badge b-done">Ergebnis gesendet ' + esc(when(res[0].created)) + '</span>';
+        else if (started) badge = '<span class="badge b-run">Analyse gestartet ' + esc(when(started)) + '</span>';
+        const cost = costFor(u.id), nruns = runs.filter(c => c.id === u.id).length;
+        if (cost !== null) badge += ` <span class="badge b-cost" title="${nruns} Lauf/Läufe">${usd(cost)}</span>`;
+        const isNew = !u.error && !res.length && !started;
+        const total = u.files.reduce((n, f) => n + (f.size || 0), 0);
+        return `<article class="card upload${isNew ? " new" : ""}" data-id="${esc(u.id)}">
+          <div class="u-head"><strong>${esc(u.batch || u.id)}</strong>
+            <span class="when">${esc(when(u.created) || when(idTime(u.id)))} · ${u.files.length} Datei(en), ${size(total)}</span>${badge}</div>
+          ${u.files.length ? '<div class="files">' + u.files.map(f => `<span class="file">${esc(f.name)} <span>${size(f.size || 0)}</span></span>`).join("") + "</div>" : ""}
+          <div class="instr${u.instructions ? "" : " none"}">${esc(u.instructions || "Keine Instructions – Claude macht eine allgemeine Triage.")}</div>
+          <div class="note-box" ${notes[u.id] ? "" : "hidden"}><textarea class="note" maxlength="1500" placeholder="Zusätzliche Hinweise für Claude (optional)">${esc(notes[u.id] || "")}</textarea></div>
+          <div class="actions">
+            <button class="btn primary" data-a="analyze" type="button" ${u.error ? "disabled" : ""}>${res.length || started ? "Nochmal analysieren" : "Analysieren"}</button>
+            <button class="btn" data-a="boost" type="button" title="Gleiche Analyse auf Opus statt Sonnet – für schwierige Fälle, kostet etwa das 5–10-Fache" ${u.error ? "disabled" : ""}>Boost (Opus)</button>
+            <span class="auto" ${autoAt[u.id] ? "" : "hidden"}>Startet automatisch in <b>${autoLeft(u.id)}</b> s</span>
+            <button class="btn" data-a="stop" type="button" ${autoAt[u.id] ? "" : "hidden"}>Stopp</button>
+            <button class="link-btn" data-a="note" type="button" ${notes[u.id] ? "hidden" : ""}>+ Hinweis</button>
+            <button class="btn danger" data-a="done" type="button" style="margin-left:auto">Erledigt</button>
+          </div>
+        </article>`;
+      }).join("");
+    }
+
+    $("results").innerHTML = data.results.length ? data.results.map(r => `<tr>
+        <td class="time">${esc(when(r.created) || r.id)}</td>
+        <td>${r.error ? '<span class="badge b-err">' + esc(r.error) + "</span>" : esc(r.batch || "–")}</td>
+        <td class="time">${esc(r.inbox || "–")}</td>
+        <td class="num">${costFor(r.inbox) !== null ? usd(costFor(r.inbox)) : "–"}</td></tr>`).join("")
+      : '<tr><td colspan="4" class="empty">Noch keine Ergebnisse.</td></tr>';
+
+    $("costs").innerHTML = runs.length ? runs.map(c => `<tr>
+        <td class="time">${esc(when(c.last))}</td>
+        <td class="time">${esc(c.id)}</td>
+        <td>${esc(batchFor(c.id) || "–")}</td>
+        <td>${esc(c.model || "–")}</td>
+        <td class="num">${mtok(c.cacheRead)}</td>
+        <td class="num"><b>${usd(c.cost)}</b></td></tr>`).join("")
+      : '<tr><td colspan="6" class="empty">Noch keine Kosten (ccusage nicht gefunden oder keine Sitzungen).</td></tr>';
+    const sum = runs.reduce((n, c) => n + c.cost, 0);
+    $("cost-sum").textContent = runs.length ? `· ${runs.length} Läufe, ${usd(sum)} gesamt, Ø ${usd(sum / runs.length)}` : "";
+
+    const waiting = data.uploads.filter(u => !u.error && !resultsFor(u.id).length && !data.started[u.id]).length;
+    document.title = (waiting ? `(${waiting}) ` : "") + "PAW Exchange";
+  }
+
+  async function post(action, body) {
+    const r = await fetch("/api/paw/" + action, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-PD-Filter": "1" }, body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+  }
+
+  function autoLeft(id) { return Math.max(0, Math.ceil((autoAt[id] - Date.now()) / 1000)); }
+  function stopAuto(id) {
+    if (!autoAt[id]) return;
+    delete autoAt[id];
+    post("stop", { id }).catch(e => toast(e.message, true));
+    const card = $("uploads").querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (card) { card.querySelector(".auto").hidden = true; card.querySelector('[data-a="stop"]').hidden = true; }
+  }
+  async function analyze(id, btn, boost = false) {
+    busy = true; if (btn) btn.disabled = true;
+    try {
+      await post("analyze", { id, note: notes[id] || "", boost });
+      delete notes[id];
+      toast(boost ? "Claude (Opus) startet in iTerm …" : "Claude startet in iTerm …");
+      await load();
+    } catch (e) {
+      toast(e.message, true);
+      if (btn) btn.disabled = false;
+    } finally { busy = false; }
+  }
+  // Countdown anzeigen; ist er abgelaufen, hat der Dienst gestartet -> neu laden
+  setInterval(() => {
+    for (const id of Object.keys(autoAt)) {
+      const card = $("uploads").querySelector(`[data-id="${CSS.escape(id)}"]`);
+      if (card) card.querySelector(".auto b").textContent = autoLeft(id);
+      if (autoAt[id] + 2000 < Date.now() && !busy) { delete autoAt[id]; load(); }
+    }
+  }, 1000);
+
+  $("uploads").addEventListener("input", ev => {
+    if (ev.target.classList.contains("note")) notes[ev.target.closest("[data-id]").dataset.id] = ev.target.value;
+  });
+  $("uploads").addEventListener("click", async ev => {
+    const btn = ev.target.closest("[data-a]"); if (!btn || busy) return;
+    const card = btn.closest("[data-id]"), id = card.dataset.id;
+    if (btn.dataset.a === "stop") { stopAuto(id); toast("Automatischer Start gestoppt"); return; }
+    if (btn.dataset.a === "note") { stopAuto(id); btn.hidden = true; card.querySelector(".note-box").hidden = false; card.querySelector(".note").focus(); return; }
+    if (btn.dataset.a === "done" && !btn.classList.contains("armed")) {
+      btn.classList.add("armed"); btn.textContent = "Wirklich löschen?";
+      setTimeout(() => { if (btn.isConnected) { btn.classList.remove("armed"); btn.textContent = "Erledigt"; } }, 3000);
+      return;
+    }
+    if (btn.dataset.a === "analyze") { stopAuto(id); return analyze(id, btn); }
+    if (btn.dataset.a === "boost") { stopAuto(id); return analyze(id, btn, true); }
+    busy = true; btn.disabled = true;
+    try {
+      stopAuto(id);
+      await post("done", { id });
+      toast("Upload gelöscht");
+      await load();
+    } catch (e) {
+      toast(e.message, true);
+      btn.disabled = false;
+    } finally { busy = false; }
+  });
+  $("refresh").onclick = async () => { $("refresh").disabled = true; await load(true); $("refresh").disabled = false; };
+
+  load();
+  setInterval(() => { if (!document.hidden) load(); }, 15000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>

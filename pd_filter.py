@@ -31,7 +31,7 @@ oder Umgebungsvariablen (die haben Vorrang):
   ONLY_ON_CALL        optional, Standard: false. true = nur aktiv, solange du laut PagerDuty
                       gerade in einem Schedule on-call bist (sonst pausiert, keine Mitteilungen)
   OVERRIDE_USER       optional, Standard: CSOC Dummy. PagerDuty-User (Name oder E-Mail), an den
-                      der Button "Rest der Schicht abgeben" per Override uebergibt
+                      der Button "On-Call ab jetzt uebergeben" per Override uebergibt
   ONLY_IN_WINDOW      optional, Standard: false. true = nur START_HOUR bis END_HOUR aktiv
   START_HOUR          optional, Standard: 8
   END_HOUR            optional, Standard: 18
@@ -39,7 +39,7 @@ oder Umgebungsvariablen (die haben Vorrang):
   LAS_END_HOUR        optional, Standard: 18. Bis dahin laufen die PD-Benachrichtigungen nach Klick
                       auf "LAS" (Last Analyst Standing), danach werden sie automatisch wieder entfernt
   LAS_CONTACTS        optional, kommagetrennte IDs der PagerDuty-Kontakte (Geraete, SMS, Anruf, E-Mail),
-                      die LAS/Schicht anschalten. Leer = alle Geraete mit PagerDuty-App (Push)
+                      die LAS / "Ohne Ende an" anschalten. Leer = alle Geraete mit PagerDuty-App (Push)
   LAS_URGENCY         optional, Standard: hoch. Fuer welche Dringlichkeit: hoch | niedrig | beide
 Datenschutz ist fest an (QUIET): keine Incident-Titel ins Log, keine Kundendaten an ntfy.
   WEB_PORT            optional, Standard: 8790 (Live-Ansicht, nur 127.0.0.1). 0 = aus
@@ -61,6 +61,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
+
+import paw_exchange
 
 BASE_DIR = Path(__file__).resolve().parent
 CUSTOMERS_FILE = BASE_DIR / "customers.txt"
@@ -116,6 +118,7 @@ PD_FROM_EMAIL = os.environ.get("PD_FROM_EMAIL", "").strip()
 PD_API = "https://api.pagerduty.com"
 DASHBOARD_FILE = BASE_DIR / "dashboard.html"
 MINI_FILE = BASE_DIR / "mini.html"          # kompakte Ansicht fuer das Extension-Popup
+PAW_FILE = BASE_DIR / "paw.html"            # PAW Exchange: Uploads vom PAW per Klick analysieren
 
 # Zustand fuer die Live-Ansicht
 STATE_LOCK = threading.Lock()
@@ -135,6 +138,7 @@ STATE = {
     "overrides": [],            # von mir gesetzte, noch laufende Overrides: [{"schedule", "end", ...}]
     "las": None,                # Push-Regeln aktiv: {"mode": "las"|"schicht", "until": ISO-Zeit oder None}
     "customers_editable": not os.environ.get("CUSTOMERS", "").strip(),
+    "paw": paw_exchange.enabled(),   # Link zur PAW-Seite zeigen
 }
 EVENTS = deque(maxlen=300)      # Verlauf (neueste zuerst)
 
@@ -482,7 +486,7 @@ def hand_over_shift():
     try:
         shifts = fetch_my_shifts()
         if not shifts:
-            return "Du bist gerade in keinem Schedule on-call", ""
+            return "Du bist gerade nicht On-Call", ""
         user_id = find_user_id(OVERRIDE_USER)
         if not user_id:
             return f"PagerDuty-User {OVERRIDE_USER!r} nicht gefunden", ""
@@ -490,7 +494,7 @@ def hand_over_shift():
         done = []
         for schedule_id, s in shifts.items():
             if not s["end"]:
-                return f"Schicht in {s['schedule']} hat kein Ende, kein Override gesetzt", ""
+                return f"On-Call in {s['schedule']} hat kein Ende, nicht uebergeben", ""
             r = requests.post(f"{PD_API}/schedules/{schedule_id}/overrides", headers=headers, timeout=20,
                               json={"overrides": [{"start": start, "end": s["end"],
                                                    "user": {"id": user_id, "type": "user_reference"}}]})
@@ -510,7 +514,7 @@ def hand_over_shift():
     except (requests.RequestException, KeyError, ValueError) as e:
         return f"PagerDuty-Fehler: {e}", ""
     _ON_CALL_CACHE["at"] = 0.0   # beim naechsten Durchlauf neu pruefen -> pausiert dann
-    return None, f"Override an {OVERRIDE_USER}: " + ", ".join(done)
+    return None, f"On-Call an {OVERRIDE_USER} uebergeben: " + ", ".join(done)
 
 
 def take_back_shift():
@@ -518,7 +522,7 @@ def take_back_shift():
     kuerzt PagerDuty ihn auf jetzt. Liefert (Fehlertext oder None, Beschreibung)."""
     overrides = load_overrides()
     if not overrides:
-        return "Kein abgegebener Override gefunden", ""
+        return "Keine Uebergabe gefunden", ""
     headers = pd_write_headers()
     done = []
     try:
@@ -535,7 +539,7 @@ def take_back_shift():
         return f"PagerDuty-Fehler: {e}", ""
     save_overrides(overrides)
     _ON_CALL_CACHE["at"] = 0.0   # beim naechsten Durchlauf neu pruefen -> wieder aktiv
-    return None, "Schicht zurueckgeholt: " + ", ".join(done)
+    return None, "Uebergabe zurueckgenommen: " + ", ".join(done)
 
 
 # ---------- LAS (Last Analyst Standing): PD-Benachrichtigungen voruebergehend an ----------
@@ -596,7 +600,7 @@ def start_las(mode="las"):
     Regeln fuer SMS, Anruf oder E-Mail bleiben stehen, auch nach dem Beenden.
     Liefert (Fehlertext oder None, Beschreibung)."""
     if load_las():
-        return "PagerDuty-Push ist schon an (LAS oder Schicht)", ""
+        return "PagerDuty-Benachrichtigung ist schon an", ""
     until = None
     if mode == "las":
         now = datetime.now(TZ)
@@ -649,8 +653,8 @@ def start_las(mode="las"):
         return f"PagerDuty-Fehler: {e}", ""
     save_las({"mode": mode, "until": until_text, "rules": created + adopted})
     names = ", ".join(f"{CONTACT_TYPES[c['type']]} {c.get('summary', '')}".strip() for c in devices)
-    what = f"LAS an bis {until:%H:%M}" if until else "Schicht an"
-    return None, f"{what}: PagerDuty ({URGENCY_TEXT[LAS_URGENCY]}) auf {names}"
+    what = f"LAS bis {until:%H:%M}" if until else "ohne Ende"
+    return None, f"PagerDuty-Benachrichtigung an ({what}, {URGENCY_TEXT[LAS_URGENCY]}): {names}"
 
 
 def stop_las():
@@ -658,7 +662,7 @@ def stop_las():
     Liefert (Fehlertext oder None, Beschreibung)."""
     las = load_las()
     if not las:
-        return "PagerDuty-Push ist nicht an", ""
+        return "PagerDuty-Benachrichtigung ist nicht an", ""
     headers = pd_write_headers()
     try:
         for rule_id in list(las["rules"]):
@@ -672,8 +676,7 @@ def stop_las():
         save_las(las)
         return f"PagerDuty-Fehler: {e}", ""
     save_las(None)
-    what = "Schicht" if las.get("mode") == "schicht" else "LAS"
-    return None, f"{what} aus: PagerDuty-Regeln entfernt"
+    return None, "PagerDuty-Benachrichtigung aus: Regeln entfernt"
 
 
 def end_las_if_due():
@@ -842,6 +845,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._send(403, b"verboten", "text/plain; charset=utf-8")
         pages = {"/": DASHBOARD_FILE, "/index.html": DASHBOARD_FILE, "/mini": MINI_FILE}
+        if paw_exchange.enabled():
+            pages["/paw"] = PAW_FILE
         if self.path in pages:
             try:
                 body = pages[self.path].read_bytes()
@@ -851,6 +856,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path == "/api/contacts":
             err, contacts = fetch_contacts()
             return self._json(502, {"error": err}) if err else self._json(200, {"contacts": contacts})
+        if self.path in ("/api/paw", "/api/paw?refresh=1") and paw_exchange.enabled():
+            return self._json(200, paw_exchange.state(force=self.path.endswith("refresh=1")))
         if self.path == "/api/state":
             with STATE_LOCK:
                 data = dict(STATE, events=list(EVENTS))
@@ -878,8 +885,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 err, text = stop_las()
             if err:
-                log(f"PagerDuty-Push: {err}")
-                add_event("error", f"PagerDuty-Push: {err}")
+                log(f"PagerDuty-Benachrichtigung: {err}")
+                add_event("error", f"PagerDuty-Benachrichtigung: {err}")
                 return self._json(502, {"error": err})
             log(text)
             add_event("info", text)
@@ -894,7 +901,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             add_event("info", text)
             return self._json(200, {"ok": True, "text": text})
         if self.path not in ACTIONS and self.path not in (
-                "/api/customers/add", "/api/customers/remove", "/api/settings"):
+                "/api/customers/add", "/api/customers/remove", "/api/settings", "/api/paw/analyze", "/api/paw/done", "/api/paw/stop"):
             return self._json(404, {"error": "nicht gefunden"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -905,6 +912,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 raise ValueError
         except (ValueError, AttributeError):
             return self._json(400, {"error": "ungueltige Anfrage"})
+
+        if self.path.startswith("/api/paw/"):
+            if not paw_exchange.enabled():
+                return self._json(404, {"error": "PAW Exchange ist nicht eingerichtet"})
+            upload_id = str(body.get("id", ""))
+            if self.path.endswith("/stop"):
+                err = paw_exchange.stop_auto(upload_id)
+                return self._json(502 if err else 200, {"error": err} if err else {"ok": True})
+            if self.path.endswith("/analyze"):
+                boost = body.get("boost") is True
+                err = paw_exchange.analyze(upload_id, str(body.get("note", ""))[:2000], boost)
+                text = f"PAW: Analyse gestartet ({upload_id}{', Boost/Opus' if boost else ''})"
+            else:
+                err = paw_exchange.done(upload_id)
+                text = f"PAW: Upload geloescht ({upload_id})"
+            if err:
+                log(f"PAW: {err}")
+                return self._json(502, {"error": err})
+            log(text)
+            add_event("info", text)
+            return self._json(200, {"ok": True})
 
         if self.path == "/api/settings":
             err, changed = update_settings(body)
@@ -972,6 +1000,7 @@ def start_dashboard():
         return
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"Live-Ansicht: http://localhost:{WEB_PORT}")
+    paw_exchange.start_auto()   # neue PAW-Uploads auch ohne offene Seite automatisch starten
 
 
 # ---------- Hauptschleife ----------

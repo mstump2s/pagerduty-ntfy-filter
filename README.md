@@ -27,11 +27,11 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   mit der Zahl offener Incidents deiner Kunden, Icon blinkt bei lauten Alarmen
 - **Nur im Schedule aktiv** (`ONLY_ON_CALL=true`): Bist du laut PagerDuty gerade nicht
   on-call, pausiert der Filter und schickt nichts.
-- **Schicht abgeben:** Ein Button legt einen Override von jetzt bis Schichtende auf
+- **On-Call übergeben:** Ein Button legt einen Override von jetzt bis Schichtende auf
   einen anderen User an (`OVERRIDE_USER`, z. B. ein Dummy-User). Nach einer Pause holt
-  „Schicht zurückholen“ sie wieder zurück (löscht den Override).
+  „Übergabe zurücknehmen“ den On-Call wieder zurück (löscht den Override).
 - **LAS (Last Analyst Standing):** Ein Button schaltet die PagerDuty-Push-Benachrichtigungen
-  bis 18 Uhr an (alle Kunden), danach entfernt der Filter sie automatisch wieder. „Schicht“
+  bis 18 Uhr an (alle Kunden), danach entfernt der Filter sie automatisch wieder. „Ohne Ende an“
   schaltet sie ohne Endzeit an, bis du sie selbst wieder ausschaltest. In den Einstellungen
   wählst du, welche Kontakte (Push, SMS, Anruf, E-Mail) und welche Dringlichkeit.
 - **Arbeitszeiten** (`ONLY_IN_WINDOW=true`): nur zu festen Zeiten aktiv.

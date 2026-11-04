@@ -80,6 +80,8 @@
   .settings input[type=number] { width: 90px; }
   .settings fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0;
     display: grid; gap: 6px; }
+  .settings h3 { font-size: 13px; margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
+  .settings h3:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
   .settings legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
   .add-customer input { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px; width: 150px;
                         border: 1px solid var(--line); background: var(--panel); color: var(--text); }
@@ -105,11 +107,12 @@
     <span class="dot" id="dot"></span>
     <h1>PagerDuty-Filter</h1>
     <span class="status" id="status">verbinde…</span>
+    <a href="/paw" id="pawLink" style="margin-left:auto" hidden>PAW Exchange →</a>
   </header>
   <div class="meta">
     <span>Letzte Abfrage: <b id="lastPoll">–</b></span>
-    <span>An seit: <b id="started">–</b></span>
-    <span>Service-Filter: <b id="svcFilter">–</b></span>
+    <span>Läuft seit: <b id="started">–</b></span>
+    <span>Ton nur bei Service: <b id="svcFilter">–</b></span>
   </div>
   <div class="meta"><span>Kunden:</span><span class="chips" id="customers"></span>
     <form id="addCustomer" class="add-customer" hidden>
@@ -118,40 +121,52 @@
     </form>
   </div>
   <div class="meta" id="shiftRow" hidden>
-    <span>Schicht: <b id="shift">–</b></span>
-    <button class="ack" id="override">Rest der Schicht abgeben</button>
+    <span>On-Call: <b id="shift">–</b></span>
+    <button class="ack" id="override">On-Call ab jetzt übergeben</button>
   </div>
   <div class="meta">
-    <span>PagerDuty-Push: <b id="las">aus</b></span>
+    <span>PagerDuty-Benachrichtigung: <b id="las">aus</b></span>
     <button class="ack" id="lasToggle">LAS an</button>
-    <button class="ack" id="shiftPush">Schicht an</button>
+    <button class="ack" id="shiftPush">Ohne Ende an</button>
   </div>
   <div class="meta" id="takeBackRow" hidden>
-    <span>Abgegeben: <b id="handedOver">–</b></span>
-    <button class="ack" id="takeBack">Schicht zurückholen</button>
+    <span>Übergeben: <b id="handedOver">–</b></span>
+    <button class="ack" id="takeBack">Übergabe zurücknehmen</button>
   </div>
 
   <details class="card settings" id="settingsBox">
     <summary>Einstellungen</summary>
     <form id="settings">
-      <label>Leise Mitteilung für
-        <select name="SILENT_FOR">
-          <option value="kunden">deine Kunden, wenn der Service nicht passt</option>
-          <option value="alle">alle Incidents, die nicht laut sind</option>
-          <option value="keine">keine (nur laute Alarme)</option>
-        </select>
-      </label>
-      <label>Laut nur bei Service (mehrere mit ;, leer = alle)
+      <h3>Filter &amp; ntfy</h3>
+      <label>Ton nur bei Service (mehrere mit ;, leer = alle)
         <input name="SERVICE_FILTER" placeholder="z. B. CSOC (High)">
       </label>
-      <label class="check"><input type="checkbox" name="ONLY_ON_CALL"> Nur aktiv, wenn ich im Schedule on-call bin</label>
-      <label>Schicht abgeben an (PagerDuty-Name oder E-Mail)
+      <label>Mitteilung ohne Ton bei
+        <select name="SILENT_FOR">
+          <option value="kunden">meinen Kunden, wenn der Service nicht passt</option>
+          <option value="alle">allen Incidents ohne Ton</option>
+          <option value="keine">nie (nur Mitteilungen mit Ton)</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="ONLY_IN_WINDOW"> Filter nur zu bestimmten Zeiten</label>
+      <div class="row">
+        <label>von (Uhr) <input type="number" name="START_HOUR" min="0" max="24"></label>
+        <label>bis (Uhr) <input type="number" name="END_HOUR" min="0" max="24"></label>
+        <label class="check"><input type="checkbox" name="WEEKDAYS_ONLY"> nur Mo–Fr</label>
+      </div>
+      <label>PagerDuty abfragen alle (Sekunden) <input type="number" name="POLL_SECONDS" min="5" max="3600"></label>
+
+      <h3>On-Call</h3>
+      <label class="check"><input type="checkbox" name="ONLY_ON_CALL"> Filter nur, wenn ich On-Call bin</label>
+      <label>On-Call übergeben an (PagerDuty-Name oder E-Mail)
         <input name="OVERRIDE_USER">
       </label>
-      <label>LAS (PagerDuty-Push an) bis (Uhr)
+
+      <h3>PagerDuty-Benachrichtigung (LAS)</h3>
+      <label>LAS bis (Uhr)
         <input type="number" name="LAS_END_HOUR" min="0" max="24">
       </label>
-      <label>LAS/Schicht schaltet PagerDuty für diese Dringlichkeit an
+      <label>Für Incidents mit Dringlichkeit
         <select name="LAS_URGENCY">
           <option value="hoch">hoch</option>
           <option value="niedrig">niedrig</option>
@@ -159,17 +174,10 @@
         </select>
       </label>
       <fieldset class="contacts">
-        <legend>LAS/Schicht benachrichtigt über (nichts gewählt = alle Geräte mit PagerDuty-App)</legend>
+        <legend>Benachrichtigen über (nichts gewählt = alle Geräte mit PagerDuty-App)</legend>
         <input type="hidden" name="LAS_CONTACTS">
         <div id="contactList" class="svc">lädt…</div>
       </fieldset>
-      <label class="check"><input type="checkbox" name="ONLY_IN_WINDOW"> Nur im Zeitfenster aktiv</label>
-      <div class="row">
-        <label>von (Uhr) <input type="number" name="START_HOUR" min="0" max="24"></label>
-        <label>bis (Uhr) <input type="number" name="END_HOUR" min="0" max="24"></label>
-        <label class="check"><input type="checkbox" name="WEEKDAYS_ONLY"> nur Mo–Fr</label>
-      </div>
-      <label>Abfrage alle (Sekunden) <input type="number" name="POLL_SECONDS" min="5" max="3600"></label>
       <span class="svc">Datenschutz ist immer an: keine Incident-Titel ins Log, keine Kundendaten an ntfy.</span>
       <div class="row">
         <button class="ack" type="submit">Speichern</button>
@@ -180,15 +188,15 @@
 
   <div class="stats" id="stats">
     <button class="stat active" data-f="all"><div class="n" id="nAll">0</div><div class="l">Offen gesamt</div></button>
-    <button class="stat alarm" data-f="alarm"><div class="n" id="nAlarm">0</div><div class="l">🔔 Laut</div></button>
-    <button class="stat silent" data-f="silent"><div class="n" id="nSilent">0</div><div class="l">🔕 Leise Mitteilung</div></button>
-    <button class="stat service" data-f="service"><div class="n" id="nService">0</div><div class="l">Service gefiltert</div></button>
-    <button class="stat" data-f="customer"><div class="n" id="nCustomer">0</div><div class="l">Kein Kunde von dir</div></button>
+    <button class="stat alarm" data-f="alarm"><div class="n" id="nAlarm">0</div><div class="l">🔔 Mit Ton</div></button>
+    <button class="stat silent" data-f="silent"><div class="n" id="nSilent">0</div><div class="l">🔕 Ohne Ton</div></button>
+    <button class="stat service" data-f="service"><div class="n" id="nService">0</div><div class="l">Mein Kunde, anderer Service</div></button>
+    <button class="stat" data-f="customer"><div class="n" id="nCustomer">0</div><div class="l">Nicht mein Kunde</div></button>
   </div>
 
-  <h2 id="mineTitle">Meine Kunden – noch nicht acknowledged</h2>
+  <h2 id="mineTitle">Meine Kunden – offen, noch kein Ack</h2>
   <div class="card wrap"><table>
-    <thead><tr><th>Seit</th><th>Ergebnis</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
+    <thead><tr><th>Seit</th><th>Benachrichtigung</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
     <tbody id="mine"></tbody>
   </table></div>
 
@@ -198,22 +206,22 @@
     <tbody id="acked"></tbody>
   </table></div>
 
-  <h2>Weitere offene Incidents</h2>
+  <h2 id="othersTitle">Offene Incidents anderer Kunden</h2>
   <div class="card wrap"><table>
-    <thead><tr><th>Seit</th><th>Ergebnis</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
+    <thead><tr><th>Seit</th><th>Benachrichtigung</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
     <tbody id="incidents"></tbody>
   </table></div>
 
   <h2>Verlauf</h2>
   <div class="card wrap"><table>
-    <thead><tr><th>Zeit</th><th>Ergebnis</th><th>Details</th></tr></thead>
+    <thead><tr><th>Zeit</th><th>Was</th><th>Details</th></tr></thead>
     <tbody id="events"></tbody>
   </table></div>
 </main>
 <div id="toast" role="status" aria-live="polite"></div>
 
 <script>
-  const LABEL = { alarm: "🔔 Laut", silent: "🔕 Leise", service: "Service gefiltert", customer: "Kein Kunde",
+  const LABEL = { alarm: "🔔 Mit Ton", silent: "🔕 Ohne Ton", service: "Anderer Service", customer: "Nicht mein Kunde",
                   pending: "Fehler, neuer Versuch", error: "Fehler", info: "Info",
                   ack: "✓ Acknowledged", resolve: "✓ Resolved" };
   let filter = "all";
@@ -252,6 +260,7 @@
         ? `<button class="chip-x" data-name="${esc(c)}" title="${esc(c)} entfernen">×</button>` : ""}</span>`).join("")
       || "<span>keine</span>";
     document.getElementById("addCustomer").hidden = !d.customers_editable;
+    document.getElementById("pawLink").hidden = !d.paw;
 
     fillSettings(d.settings);
 
@@ -260,25 +269,25 @@
     if (sh) {
       const end = sh.end ? new Date(sh.end).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : null;
       document.getElementById("shift").textContent = sh.schedules.join(", ") + (end ? ` bis ${end}` : "");
-      document.getElementById("override").textContent = `Rest der Schicht an ${d.override_user} abgeben`;
+      document.getElementById("override").textContent = `On-Call ab jetzt an ${d.override_user} übergeben`;
     }
     const lasEnd = d.las?.until ? new Date(d.las.until).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : null;
     document.getElementById("las").textContent = !d.las ? "aus"
-      : d.las.mode === "schicht" ? "an (Schicht, bis du beendest)" : `an (LAS bis ${lasEnd})`;
+      : d.las.mode === "schicht" ? "an (ohne Ende)" : `an (LAS bis ${lasEnd})`;
     const lasBtn = document.getElementById("lasToggle");
-    lasBtn.textContent = d.las ? (d.las.mode === "schicht" ? "Schicht beenden" : "LAS beenden")
+    lasBtn.textContent = d.las ? "Ausschalten"
       : `LAS an bis ${String(d.settings?.LAS_END_HOUR ?? 18).padStart(2, "0")}:00`;
     lasBtn.dataset.on = d.las ? "1" : "";
     document.getElementById("shiftPush").hidden = !!d.las;
     const ov = d.overrides || [];
     document.getElementById("takeBackRow").hidden = !ov.length;
-    document.getElementById("handedOver").textContent = ov.map(o => `${o.schedule} bis ${
+    document.getElementById("handedOver").textContent = `an ${d.override_user}: ` + ov.map(o => `${o.schedule} bis ${
       new Date(o.end).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}`).join(", ");
 
     const dot = document.getElementById("dot"), st = document.getElementById("status");
-    if (d.last_error) { dot.className = "dot err"; st.textContent = "AN – Fehler: " + d.last_error; }
-    else if (d.paused) { dot.className = "dot"; st.textContent = `AN – pausiert (${d.paused})`; }
-    else { dot.className = "dot on"; st.textContent = "AN"; }
+    if (d.last_error) { dot.className = "dot err"; st.textContent = "Filter läuft – Fehler: " + d.last_error; }
+    else if (d.paused) { dot.className = "dot"; st.textContent = `Filter pausiert (${d.paused})`; }
+    else { dot.className = "dot on"; st.textContent = "Filter läuft"; }
 
     const rows = inc.filter(i => filter === "all" || i.decision === filter);
     const incRow = i => `
@@ -295,11 +304,12 @@
     const inCat = filter !== "all" ? " in dieser Kategorie" : "";
     const mine = rows.filter(i => i.customer);
     const others = rows.filter(i => !i.customer);
-    document.getElementById("mineTitle").textContent = `Meine Kunden – noch nicht acknowledged (${mine.length})`;
+    document.getElementById("mineTitle").textContent = `Meine Kunden – offen, noch kein Ack (${mine.length})`;
     document.getElementById("mine").innerHTML = mine.length ? mine.map(incRow).join("")
       : `<tr><td colspan="5" class="empty">Nichts offen${inCat}.</td></tr>`;
     document.getElementById("incidents").innerHTML = others.length ? others.map(incRow).join("")
-      : `<tr><td colspan="5" class="empty">Keine weiteren offenen Incidents${inCat}.</td></tr>`;
+      : `<tr><td colspan="5" class="empty">Nichts offen${inCat}.</td></tr>`;
+    document.getElementById("othersTitle").textContent = `Offene Incidents anderer Kunden (${others.length})`;
 
     const acked = d.acked || [];
     document.getElementById("ackedTitle").textContent =
@@ -359,9 +369,9 @@
       toast(name + " fehlgeschlagen: " + e.message, true);
     }
   };
-  [["override", () => "/api/override", "Override"], ["takeBack", () => "/api/override/remove", "Zurückholen"],
-   ["lasToggle", btn => btn.dataset.on ? "/api/las/stop" : "/api/las/start", "LAS"],
-   ["shiftPush", () => "/api/schicht/start", "Schicht"]]
+  [["override", () => "/api/override", "Übergeben"], ["takeBack", () => "/api/override/remove", "Zurücknehmen"],
+   ["lasToggle", btn => btn.dataset.on ? "/api/las/stop" : "/api/las/start", "PagerDuty-Benachrichtigung"],
+   ["shiftPush", () => "/api/schicht/start", "PagerDuty-Benachrichtigung"]]
     .forEach(([id, path, label]) => document.getElementById(id).addEventListener("click", async ev => {
       const btn = ev.currentTarget;
       btn.disabled = true;
@@ -495,7 +505,7 @@
       render(lastData);
     } catch {
       document.getElementById("dot").className = "dot err";
-      document.getElementById("status").textContent = "AUS – Filter läuft nicht";
+      document.getElementById("status").textContent = "Filter läuft nicht";
     }
   }
   refresh();

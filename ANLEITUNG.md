@@ -101,8 +101,8 @@ PagerDuty gerade in einem Schedule on-call bist (geprüft einmal pro Minute). So
 pausiert er: keine Abfrage, keine Mitteilungen. Kann der Status nicht geprüft werden
 (eigener User unbekannt, PagerDuty nicht erreichbar), läuft er sicherheitshalber weiter.
 
-**Schicht abgeben:** Solange du on-call bist, zeigt die Live-Ansicht oben deine Schicht
-und den Button **„Rest der Schicht an CSOC Dummy abgeben“**. Ein Klick legt in PagerDuty
+**On-Call übergeben:** Solange du On-Call bist, zeigt die Live-Ansicht oben deinen Schedule
+und den Button **„On-Call ab jetzt an CSOC Dummy übergeben“**. Ein Klick legt in PagerDuty
 (ohne Rückfrage) einen Override von jetzt bis Schichtende auf `OVERRIDE_USER` an
 (Standard `CSOC Dummy`, Name oder E-Mail). Mit `ONLY_ON_CALL=true` pausiert der Filter
 danach automatisch.
@@ -112,21 +112,21 @@ klickst du in der Live-Ansicht (oder Mini-Ansicht) auf **„LAS an bis 18:00“*
 sorgt dann in PagerDuty für jedes Gerät mit PagerDuty-App für eine Push-Regel (sofort, hohe
 Dringlichkeit); schon vorhandene Push-Regeln übernimmt er, statt doppelte anzulegen. Um
 `LAS_END_HOUR` (Standard 18 Uhr) löscht er diese Push-Regeln wieder, auch wenn er
-zwischendurch aus war (dann beim nächsten Start). Vorher geht es mit **„LAS beenden“**.
+zwischendurch aus war (dann beim nächsten Start). Vorher geht es mit **„Ausschalten“**.
 Andere Regeln, z. B. ein Anruf nach 5 Minuten, bleiben immer unangetastet.
 
-Unter **Einstellungen** wählst du, welche Kontakte LAS/Schicht anschaltet (Geräte mit
+Unter **Einstellungen** wählst du, welche Kontakte die PagerDuty-Benachrichtigung anschaltet (Geräte mit
 PagerDuty-App, SMS, Anruf, E-Mail; `LAS_CONTACTS`, nichts gewählt = alle Push-Geräte) und für
 welche Dringlichkeit (`LAS_URGENCY`: hoch, niedrig oder beide). Gibt es für SMS, Anruf oder
 E-Mail schon eine passende Regel, bleibt sie einfach stehen und wird beim Beenden nicht gelöscht. Die Regeln merkt
 er sich in `las.json`. Ein neues Gerät zählt erst, wenn du dich dort in der PagerDuty-App
 angemeldet hast. Die ntfy-Mitteilungen bleiben während LAS unverändert.
 
-Der Button **„Schicht an“** schaltet dieselben Push-Regeln an, aber ohne automatisches
-Ende: Sie bleiben, bis du **„Schicht beenden“** klickst.
+Der Button **„Ohne Ende an“** schaltet dieselben Regeln an, aber ohne automatisches
+Ende: Sie bleiben, bis du **„Ausschalten“** klickst.
 
-**Schicht zurückholen:** Solange ein selbst gesetzter Override läuft, zeigt die
-Live-Ansicht (und die Mini-Ansicht) den Button **„Schicht zurückholen“**, z. B. nach einer
+**Übergabe zurücknehmen:** Solange ein selbst gesetzter Override läuft, zeigt die
+Live-Ansicht (und die Mini-Ansicht) den Button **„Übergabe zurücknehmen“**, z. B. nach einer
 Pause. Er löscht den Override in PagerDuty wieder; läuft er schon, wird er auf jetzt
 gekürzt. Die gesetzten Overrides merkt sich der Filter in `overrides.json`, auch über
 einen Neustart hinweg. Overrides, die direkt in PagerDuty angelegt wurden, kennt er nicht.
