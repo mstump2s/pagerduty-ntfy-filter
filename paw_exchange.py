@@ -89,7 +89,8 @@ def state(force=False):
 
 
 def _session_upload(path):
-    """Upload-ID, die eine Claude-Sitzung analysiert hat (aus der get-Ausgabe oder den /analyze-Argumenten)."""
+    """Upload-ID, die eine Claude-Sitzung zuletzt analysiert hat (aus der get-Ausgabe oder den /analyze-Argumenten).
+    Die letzte, nicht die erste: eine fortgesetzte Sitzung (Rueckfrage) enthaelt den Verlauf der ersten Analyse."""
     st = path.stat()
     key = (st.st_mtime, st.st_size)
     hit = _session_uploads.get(path)
@@ -98,10 +99,8 @@ def _session_upload(path):
     found = None
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
-            m = SESSION_UPLOAD_RE.search(line)
-            if m:
+            for m in SESSION_UPLOAD_RE.finditer(line):
                 found = m.group(1) or m.group(2)
-                break
     _session_uploads[path] = (key, found)
     return found
 
@@ -141,17 +140,34 @@ def costs():
         return data
 
 
-def _known(upload_id):
+def _upload(upload_id):
     if not UPLOAD_ID_RE.match(upload_id):
-        return False
-    return any(u["id"] == upload_id for u in state()["uploads"])
+        return None
+    return next((u for u in state()["uploads"] if u["id"] == upload_id), None)
+
+
+def _known(upload_id):
+    return _upload(upload_id) is not None
+
+
+def _session_for(upload_id):
+    """Neueste Claude-Sitzung, die diesen Upload analysiert hat (fuer Rueckfragen), sonst None."""
+    if not UPLOAD_ID_RE.match(upload_id or "") or not SESSIONS_DIR.is_dir():
+        return None
+    hits = [p for p in SESSIONS_DIR.glob("*.jsonl") if _session_upload(p) == upload_id]
+    return max(hits, key=lambda p: p.stat().st_mtime).stem if hits else None
 
 
 def analyze(upload_id, note="", boost=False):
     """Oeffnet iTerm mit Claude (Enterprise-Account), das /analyze fuer diesen Upload ausfuehrt.
     boost: /analyze-boost statt /analyze – gleicher Ablauf, aber auf Opus statt Sonnet."""
-    if not _known(upload_id):
+    u = _upload(upload_id)
+    if not u:
         return "Upload nicht gefunden"
+    # Rueckfrage vom PAW: die Sitzung der urspruenglichen Analyse fortsetzen, damit Claude den Kontext hat.
+    # --fork-session: Kopie mit neuer ID, die alte Sitzung (evtl. noch offen im Fenster) bleibt unberuehrt.
+    session = _session_for(((u.get("followup") or {}).get("inbox")) or "")
+    resume = f"--resume {shlex.quote(session)} --fork-session " if session else ""
     run_dir = WORK_DIR / "launch"
     run_dir.mkdir(parents=True, exist_ok=True)
     prompt = f"/{'analyze-boost' if boost else 'analyze'} {upload_id}"
@@ -166,7 +182,7 @@ def analyze(upload_id, note="", boost=False):
     cmd.write_text(
         "#!/bin/zsh -l\n"
         f"cd {shlex.quote(str(WORK_DIR))}\n"
-        f"CLAUDE_CONFIG_DIR={shlex.quote(str(CLAUDE_CONFIG))} claude \"$(<{shlex.quote(str(prompt_file))})\"\n"
+        f"CLAUDE_CONFIG_DIR={shlex.quote(str(CLAUDE_CONFIG))} claude {resume}\"$(<{shlex.quote(str(prompt_file))})\"\n"
         "rc=$?\n"
         "if (( SECONDS < 30 )); then print \"\\nClaude hat sich nach $SECONDS s beendet (Exit $rc). Enter schliesst das Fenster.\"; read -r; fi\n",
         encoding="utf-8")
