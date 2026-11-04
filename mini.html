@@ -46,6 +46,9 @@
   @keyframes pulse { 50% { opacity: .2; } }
   .title { margin: 3px 0 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .title a { color: var(--text); }
+  .by { font-size: 11px; color: var(--muted); margin: -3px 0 6px; }
+  .by b { color: var(--text); }
+  .by b.me, .top b.me { color: var(--ok); }
   .actions { display: flex; gap: 6px; }
   button { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 6px; cursor: pointer;
            border: 1px solid var(--line); background: var(--panel); color: var(--text); }
@@ -98,13 +101,14 @@
     return isNaN(d) ? "" : d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
   };
 
-  function item(i, buttons, time) {
+  function item(i, buttons, time, by) {
     const alarm = i.decision === "alarm";
     return `<div class="item${alarm ? " alarm" : ""}">
       <div class="top">${alarm ? '<span class="pulse"></span>' : ""}
-        <span class="cust">${esc(i.customer || "")}</span><span>${esc(i.service)}</span>
+        <span class="cust">${esc(i.customer || "")}</span><span>${esc(i.service)}</span>${i.assigned_me
+          ? '<b class="me">dir zugewiesen</b>' : ""}
         <span class="time">${hhmm(time)}</span></div>
-      <div class="title">${link(i.title, i.url)}</div>
+      <div class="title">${link(i.title, i.url)}</div>${by ? `<div class="by">Ack von ${by}</div>` : ""}
       <div class="actions">${buttons.map(([action, label]) =>
         `<button class="${action}" data-action="${action}" data-id="${esc(i.id)}">${label}</button>`).join("")}</div>
     </div>`;
@@ -133,17 +137,18 @@
     document.getElementById("handedOver").textContent = ov.length
       ? `Übergeben an ${d.override_user} bis ` + hhmm(ov.map(o => o.end).sort().pop()) : "";
 
-    const mine = (d.incidents || []).filter(i => i.customer)
-      .sort((a, b) => (b.decision === "alarm") - (a.decision === "alarm"));
-    document.getElementById("mineTitle").textContent = `Meine Kunden · offen (${mine.length})`;
+    const mine = (d.incidents || []).filter(i => i.customer || d.all_mine)
+      .sort((a, b) => !!b.assigned_me - !!a.assigned_me || (b.decision === "alarm") - (a.decision === "alarm"));
+    document.getElementById("mineTitle").textContent = `${d.all_mine ? "Alle Kunden" : "Meine Kunden"} · offen (${mine.length})`;
     document.getElementById("mine").innerHTML = mine.length
       ? mine.map(i => item(i, [["ack", "Ack"], ["resolve", "Resolve"]], i.created_at)).join("")
       : '<div class="empty">Alles ruhig ✓</div>';
 
-    const acked = d.acked || [];
+    const acked = [...(d.acked || [])].sort((a, b) => b.mine - a.mine);
     document.getElementById("ackedBox").hidden = !acked.length;
-    document.getElementById("ackedTitle").textContent = `Von mir acknowledged (${acked.length})`;
-    document.getElementById("acked").innerHTML = acked.map(i => item(i, [["resolve", "Resolve"]], i.acked_at)).join("");
+    document.getElementById("ackedTitle").textContent = `Acknowledged (${acked.length})`;
+    document.getElementById("acked").innerHTML = acked.map(i => item(i, [["resolve", "Resolve"]], i.acked_at,
+      (i.acked_by || []).map(a => `<b class="${a.me ? "me" : ""}">${esc(a.name)}</b>`).join(", ") || "?")).join("");
   }
 
   let toastTimer;

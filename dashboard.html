@@ -88,6 +88,7 @@
   .wrap { overflow-x: auto; }
   .b-ack, .b-resolve { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
   .actions { display: flex; gap: 6px; }
+  b.me { color: var(--ok); }
   .ack.resolve:hover { border-color: var(--err); color: var(--err); }
   .ack { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px; cursor: pointer;
          border: 1px solid var(--line); background: var(--panel); color: var(--text); white-space: nowrap; }
@@ -200,17 +201,19 @@
     <tbody id="mine"></tbody>
   </table></div>
 
-  <h2 id="ackedTitle">Von mir acknowledged</h2>
+  <h2 id="ackedTitle">Acknowledged</h2>
   <div class="card wrap"><table>
-    <thead><tr><th>Ack seit</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
+    <thead><tr><th>Ack seit</th><th>Incident</th><th>Ack von</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
     <tbody id="acked"></tbody>
   </table></div>
 
+  <div id="othersBox">
   <h2 id="othersTitle">Offene Incidents anderer Kunden</h2>
   <div class="card wrap"><table>
     <thead><tr><th>Seit</th><th>Benachrichtigung</th><th>Incident</th><th class="hide-sm">Kunde</th><th></th></tr></thead>
     <tbody id="incidents"></tbody>
   </table></div>
+  </div>
 
   <h2>Verlauf</h2>
   <div class="card wrap"><table>
@@ -231,6 +234,14 @@
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const badge = k => `<span class="badge b-${k}">${LABEL[k] || k}</span>`;
   const link = (title, url) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(title)}</a>` : esc(title);
+  // Wer acknowledged hat; "zugewiesen" nur, wenn es jemand anderes ist
+  const ackedBy = i => {
+    const by = (i.acked_by || []).map(a => `<b class="${a.me ? "me" : ""}">${esc(a.name)}</b>`);
+    const names = new Set((i.acked_by || []).map(a => a.name));
+    const other = (i.assigned || []).filter(n => !names.has(n));
+    return (by.join(", ") || "?") +
+      (other.length ? `<div class="svc">zugewiesen: ${esc(other.join(", "))}</div>` : "");
+  };
   const fmtTime = iso => {
     if (!iso) return "–";
     const d = new Date(iso);
@@ -294,7 +305,8 @@
       <tr class="${i.decision === "alarm" ? "row-alarm" : ""}">
         <td class="time">${fmtTime(i.created_at)}</td>
         <td>${badge(i.decision)}</td>
-        <td>${link(i.title, i.url)}<div class="svc">${esc(i.service)}</div></td>
+        <td>${link(i.title, i.url)}<div class="svc">${esc(i.service)}${i.assigned_me
+          ? ' · <b class="me">dir zugewiesen</b>' : ""}</div></td>
         <td class="hide-sm">${esc(i.customer || "")}</td>
         <td><div class="actions">
           <button class="ack" data-action="ack" data-id="${esc(i.id)}">Ack</button>
@@ -302,28 +314,35 @@
         </div></td>
       </tr>`;
     const inCat = filter !== "all" ? " in dieser Kategorie" : "";
-    const mine = rows.filter(i => i.customer);
-    const others = rows.filter(i => !i.customer);
-    document.getElementById("mineTitle").textContent = `Meine Kunden – offen, noch kein Ack (${mine.length})`;
+    const isMine = i => i.customer || d.all_mine;
+    // Mir zugewiesene zuerst, sonst neueste zuerst (kommt so vom Server)
+    const mine = rows.filter(isMine).sort((a, b) => !!b.assigned_me - !!a.assigned_me);
+    const others = rows.filter(i => !isMine(i));
+    document.getElementById("mineTitle").textContent =
+      `${d.all_mine ? "Alle Kunden" : "Meine Kunden"} – offen, noch kein Ack (${mine.length})`;
+    document.getElementById("othersBox").hidden = !!d.all_mine;
     document.getElementById("mine").innerHTML = mine.length ? mine.map(incRow).join("")
       : `<tr><td colspan="5" class="empty">Nichts offen${inCat}.</td></tr>`;
     document.getElementById("incidents").innerHTML = others.length ? others.map(incRow).join("")
       : `<tr><td colspan="5" class="empty">Nichts offen${inCat}.</td></tr>`;
     document.getElementById("othersTitle").textContent = `Offene Incidents anderer Kunden (${others.length})`;
 
-    const acked = d.acked || [];
+    // Eigene zuerst, sonst nach Ack-Zeit (kommt so vom Server)
+    const acked = [...(d.acked || [])].sort((a, b) => b.mine - a.mine);
     document.getElementById("ackedTitle").textContent =
-      (d.acked_mine ? "Von mir acknowledged" : "Acknowledged (alle – eigener PagerDuty-User unbekannt)") +
+      (!d.acked_mine ? "Acknowledged (alle – eigener PagerDuty-User unbekannt)"
+        : d.all_mine ? "Acknowledged – alle Kunden" : "Acknowledged – meine Kunden und von mir") +
       ` (${acked.length})`;
     document.getElementById("acked").innerHTML = acked.length ? acked.map(i => `
       <tr>
         <td class="time">${fmtTime(i.acked_at)}</td>
         <td>${link(i.title, i.url)}<div class="svc">${esc(i.service)}</div></td>
+        <td>${ackedBy(i)}</td>
         <td class="hide-sm">${esc(i.customer || "")}</td>
         <td><div class="actions">
           <button class="ack resolve" data-action="resolve" data-id="${esc(i.id)}">Resolve</button>
         </div></td>
-      </tr>`).join("") : `<tr><td colspan="4" class="empty">Nichts acknowledged.</td></tr>`;
+      </tr>`).join("") : `<tr><td colspan="5" class="empty">Nichts acknowledged.</td></tr>`;
 
     const ev = d.events || [];
     document.getElementById("events").innerHTML = ev.length ? ev.map(e => `

@@ -131,7 +131,7 @@ STATE = {
     "customers": [],
     "service_filter": SERVICE_FILTER,
     "incidents": [],            # aktuell offene Incidents mit Entscheidung
-    "acked": [],                # von mir acknowledged (oder alle, wenn eigener User unbekannt)
+    "acked": [],                # acknowledged: meine Kunden (von allen) + von mir (oder alle, wenn eigener User unbekannt)
     "acked_mine": False,        # True = "acked" ist auf meinen User gefiltert
     "shift": None,              # aktuelle Schicht: {"schedules": [...], "end": ISO-Zeit}
     "override_user": OVERRIDE_USER,
@@ -364,22 +364,25 @@ def fetch_incidents(status):
 
 
 MY_USER_ID = None   # None = noch nicht ermittelt, "" = nicht ermittelbar
+MY_USER_NAME = ""   # eigener Name in PagerDuty, fuer "Ack von" direkt nach dem Klick
 
 
 def find_my_user_id():
     """Eigene PagerDuty-User-ID: bei persoenlichem Key ueber /users/me, sonst ueber PD_FROM_EMAIL.
     Bei Netzwerkfehlern bleibt es bei None -> naechster Durchlauf versucht es erneut."""
-    global MY_USER_ID
+    global MY_USER_ID, MY_USER_NAME
     try:
         r = requests.get(f"{PD_API}/users/me", headers=PD_HEADERS, timeout=20)
         if r.ok:
             MY_USER_ID = r.json()["user"]["id"]
+            MY_USER_NAME = r.json()["user"].get("name", "")
         elif PD_FROM_EMAIL:
             r = requests.get(f"{PD_API}/users", headers=PD_HEADERS,
                              params={"query": PD_FROM_EMAIL}, timeout=20)
             r.raise_for_status()
-            MY_USER_ID = next((u["id"] for u in r.json().get("users", [])
-                               if u.get("email", "").lower() == PD_FROM_EMAIL.lower()), "")
+            me = next((u for u in r.json().get("users", [])
+                       if u.get("email", "").lower() == PD_FROM_EMAIL.lower()), {})
+            MY_USER_ID, MY_USER_NAME = me.get("id", ""), me.get("name", "")
         else:
             MY_USER_ID = ""
     except (requests.RequestException, KeyError, ValueError) as e:
@@ -691,21 +694,34 @@ def end_las_if_due():
     add_event("error" if err else "info", err or text)
 
 
-def fetch_my_acked(customers):
-    """Acknowledged Incidents, die ich acknowledged habe (ohne bekannte User-ID: alle)."""
+def fetch_acked(customers, all_mine=False):
+    """Acknowledged Incidents meiner Kunden (egal von wem) plus alle, die ich acknowledged habe.
+    Bei LAS/"Ohne Ende an" (all_mine) und ohne bekannte eigene User-ID: alle acknowledged Incidents."""
     acked = []
     for inc in fetch_incidents("acknowledged"):
+        customer = match_customer(inc.get("title", ""), customers)
         acks = inc.get("acknowledgements") or []
-        mine = [a for a in acks if (a.get("acknowledger") or {}).get("id") == MY_USER_ID]
-        if MY_USER_ID and not mine:
+        mine = bool(MY_USER_ID) and any((a.get("acknowledger") or {}).get("id") == MY_USER_ID for a in acks)
+        if MY_USER_ID and not mine and not customer and not all_mine:
             continue
-        last = (mine or acks or [{}])[-1]
+        by, by_ids = [], set()
+        for a in acks:
+            who = a.get("acknowledger") or {}
+            if who.get("id") in by_ids:
+                continue
+            by_ids.add(who.get("id"))
+            by.append({"name": who.get("summary") or "?", "me": who.get("id") == MY_USER_ID})
+        assigned = [(a.get("assignee") or {}).get("summary") for a in inc.get("assignments") or []]
+        last = (acks or [{}])[-1]
         acked.append({
             "id": inc["id"],
             "title": inc.get("title", ""),
             "service": service_name(inc),
             "url": inc.get("html_url", ""),
-            "customer": match_customer(inc.get("title", ""), customers),
+            "customer": customer,
+            "mine": mine,
+            "acked_by": by,
+            "assigned": [a for a in assigned if a],
             "acked_at": last.get("at") or inc.get("updated_at") or inc.get("created_at", ""),
         })
     return sorted(acked, key=lambda a: a["acked_at"], reverse=True)
@@ -861,6 +877,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path == "/api/state":
             with STATE_LOCK:
                 data = dict(STATE, events=list(EVENTS))
+            # Bei LAS / "Ohne Ende an" uebernehme ich alle Kunden -> alle Incidents zaehlen als meine
+            data["all_mine"] = bool(data.get("las"))
             return self._send(200, json.dumps(data).encode("utf-8"), "application/json")
         self._send(404, b"nicht gefunden", "text/plain; charset=utf-8")
 
@@ -975,7 +993,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Sofort oben anzeigen, nicht erst nach der naechsten Abfrage
             if status == "acknowledged" and inc:
                 STATE["acked"].insert(0, {k: inc.get(k) for k in ("id", "title", "service", "url", "customer")}
-                                      | {"acked_at": datetime.now(TZ).isoformat()})
+                                      | {"acked_at": datetime.now(TZ).isoformat(), "mine": True,
+                                         "acked_by": [{"name": MY_USER_NAME or "ich", "me": True}], "assigned": []})
         if inc:
             add_event(kind, f"✓ {label}",
                       {"title": inc["title"], "service": {"summary": inc["service"]}, "html_url": inc["url"]},
@@ -1057,6 +1076,8 @@ def poll_once(seen):
             "decision": "silent" if silent and decision in ("service", "customer") else decision,
             "customer": customer,
             "alarmed": alarmed,
+            "assigned_me": bool(MY_USER_ID) and any(
+                (a.get("assignee") or {}).get("id") == MY_USER_ID for a in inc.get("assignments") or []),
         })
 
     # Nur IDs behalten, die noch offen sind -> Datei waechst nicht endlos
@@ -1070,7 +1091,9 @@ def poll_once(seen):
     # Erst nach den Alarmen: ein Fehler hier darf keine Benachrichtigung verhindern
     if MY_USER_ID is None:
         find_my_user_id()
-    acked = fetch_my_acked(customers)
+    with STATE_LOCK:
+        all_mine = bool(STATE["las"])
+    acked = fetch_acked(customers, all_mine)
     with STATE_LOCK:
         STATE.update(acked=acked, acked_mine=bool(MY_USER_ID))
 

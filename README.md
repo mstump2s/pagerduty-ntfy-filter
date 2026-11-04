@@ -18,7 +18,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   ohne Ton, optional auf einem eigenen Topic.
 - **Kein Doppel-Alarm:** Jeder Incident wird nur einmal gemeldet, auch nach einem Neustart.
 - **Live-Ansicht** (`http://localhost:8790`, nur lokal erreichbar):
-  - oben die offenen Incidents deiner Kunden, dann die von dir acknowledged Incidents
+  - oben die offenen Incidents deiner Kunden, darunter die acknowledged (von dir und
+    die deiner Kunden, mit Spalte „Ack von“); während LAS zählen alle Kunden als deine
   - Ack und Resolve mit einem Klick
   - Zähler-Kacheln als Filter, Verlauf aller Entscheidungen
   - Einstellungen (leise Mitteilungen, Service-Filter, Schedule, Zeitfenster …) live

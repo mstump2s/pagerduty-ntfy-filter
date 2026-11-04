@@ -55,8 +55,12 @@ die Zähler-Kacheln oben filtern die Tabelle. **Ack** und **Resolve** setzen den
 Incident direkt in PagerDuty (ohne Rückfrage).
 
 Ganz oben stehen die offenen, noch nicht acknowledged Incidents **deiner Kunden**
-(mit Ack/Resolve), darunter die Incidents, die **du** acknowledged hast, jeweils mit
-Resolve-Button. Die Tabelle „Weitere offene Incidents“ enthält den Rest. Deinen PagerDuty-User erkennt das Tool am persönlichen API-Key;
+(mit Ack/Resolve), darunter die acknowledged Incidents: alle, die **du** acknowledged hast
+(zuerst), und die deiner Kunden, die jemand anderes acknowledged hat. Die Spalte „Ack von“
+zeigt, wer es war, und, falls abweichend, wem der Incident zugewiesen ist. Alle mit
+Resolve-Button. Während LAS oder „Ohne Ende an“ zählen **alle Kunden** als deine (Anzeige,
+Zähler der Extension; die ntfy-Mitteilungen bleiben unverändert). Die Tabelle „Offene Incidents
+anderer Kunden“ enthält den Rest. Deinen PagerDuty-User erkennt das Tool am persönlichen API-Key;
 bei einem Account-Key dafür `PD_FROM_EMAIL` setzen, sonst werden alle
 acknowledged Incidents angezeigt.
 

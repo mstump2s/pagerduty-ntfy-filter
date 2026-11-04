@@ -62,7 +62,7 @@ async function update() {
     await chrome.action.setTitle({ title: "PD-Filter läuft nicht" });
     return;
   }
-  const mine = (d.incidents || []).filter(i => i.customer);
+  const mine = (d.incidents || []).filter(i => i.customer || d.all_mine);   // bei LAS: alle Kunden
   const alarms = mine.filter(i => i.decision === "alarm");
   let title;
   if (d.paused) {
