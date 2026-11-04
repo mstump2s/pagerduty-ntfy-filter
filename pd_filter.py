@@ -631,15 +631,17 @@ def start_las(mode="las"):
         urgencies = {"hoch": ["high"], "niedrig": ["low"], "beide": ["high", "low"]}[LAS_URGENCY]
         r = requests.get(f"{base}/notification_rules", headers=PD_HEADERS, timeout=20)
         r.raise_for_status()
-        existing = {(n["contact_method"].get("id"), n.get("urgency")): n["id"]
-                    for n in r.json().get("notification_rules", [])}
+        # Pro Kontakt und Dringlichkeit kann es mehrere Regeln geben (z.B. sofort und nach 5 min)
+        existing = {}
+        for n in r.json().get("notification_rules", []):
+            existing.setdefault((n["contact_method"].get("id"), n.get("urgency")), []).append(n["id"])
         adopted = []
         for c in devices:
             for urgency in urgencies:
                 if (c["id"], urgency) in existing:
                     # Nur Push-Regeln uebernehmen, Anruf/SMS/E-Mail-Regeln nie loeschen
                     if c["type"] == "push_notification_contact_method":
-                        adopted.append(existing[(c["id"], urgency)])
+                        adopted.extend(existing[(c["id"], urgency)])
                     continue
                 r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
                     "notification_rule": {
