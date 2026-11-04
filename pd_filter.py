@@ -599,8 +599,9 @@ def start_las(mode="las"):
     """Fuer die ausgewaehlten Kontakte (LAS_CONTACTS, leer = alle Push-Geraete) eine
     PD-Benachrichtigungsregel (sofort, Dringlichkeit laut LAS_URGENCY) sicherstellen: bei "las"
     bis LAS_END_HOUR, bei "schicht" bis zum Ausschalten per Hand. Schon vorhandene Push-Regeln
-    werden uebernommen, damit es keine doppelten gibt, und am Ende mit entfernt. Schon vorhandene
-    Regeln fuer SMS, Anruf oder E-Mail bleiben stehen, auch nach dem Beenden.
+    (auch verzoegerte) werden geloescht und durch eine sofortige ersetzt, die am Ende wieder
+    entfernt wird. Schon vorhandene Regeln fuer SMS, Anruf oder E-Mail bleiben stehen, auch nach
+    dem Beenden.
     Liefert (Fehlertext oder None, Beschreibung)."""
     if load_las():
         return "PagerDuty-Benachrichtigung ist schon an", ""
@@ -635,14 +636,19 @@ def start_las(mode="las"):
         existing = {}
         for n in r.json().get("notification_rules", []):
             existing.setdefault((n["contact_method"].get("id"), n.get("urgency")), []).append(n["id"])
-        adopted = []
         for c in devices:
             for urgency in urgencies:
                 if (c["id"], urgency) in existing:
-                    # Nur Push-Regeln uebernehmen, Anruf/SMS/E-Mail-Regeln nie loeschen
-                    if c["type"] == "push_notification_contact_method":
-                        adopted.extend(existing[(c["id"], urgency)])
-                    continue
+                    # Anruf/SMS/E-Mail-Regeln nie loeschen
+                    if c["type"] != "push_notification_contact_method":
+                        continue
+                    # Push-Regeln loeschen und unten als sofortige Regel neu anlegen, sonst bliebe eine
+                    # verzoegerte Regel stehen und LAS wuerde erst nach Minuten pushen
+                    for rule_id in existing[(c["id"], urgency)]:
+                        r = requests.delete(f"{base}/notification_rules/{rule_id}", headers=headers,
+                                            timeout=20)
+                        if not r.ok and r.status_code != 404:   # 404: in PagerDuty schon geloescht
+                            raise RuntimeError(f"Regel {rule_id}: {pd_error_text(r)}")
                 r = requests.post(f"{base}/notification_rules", headers=headers, timeout=20, json={
                     "notification_rule": {
                         "type": "assignment_notification_rule", "start_delay_in_minutes": 0, "urgency": urgency,
@@ -652,11 +658,11 @@ def start_las(mode="las"):
                     raise RuntimeError(f"{c.get('summary', c['id'])}: {pd_error_text(r)}")
                 created.append(r.json()["notification_rule"]["id"])
     except (requests.RequestException, KeyError, ValueError, RuntimeError) as e:
-        # Halb angelegte Regeln nicht stehen lassen (vorhandene bleiben)
+        # Halb angelegte Regeln nicht stehen lassen (Anruf/SMS/E-Mail-Regeln bleiben)
         save_las({"mode": mode, "until": until_text, "rules": created})
         stop_las()
         return f"PagerDuty-Fehler: {e}", ""
-    save_las({"mode": mode, "until": until_text, "rules": created + adopted})
+    save_las({"mode": mode, "until": until_text, "rules": created})
     names = ", ".join(f"{CONTACT_TYPES[c['type']]} {c.get('summary', '')}".strip() for c in devices)
     what = f"LAS bis {until:%H:%M}" if until else "ohne Ende"
     return None, f"PagerDuty-Benachrichtigung an ({what}, {URGENCY_TEXT[LAS_URGENCY]}): {names}"

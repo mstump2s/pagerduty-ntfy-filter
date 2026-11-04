@@ -114,7 +114,8 @@ danach automatisch.
 **LAS (Last Analyst Standing):** An Tagen, an denen du ab 16 Uhr alle Kunden übernimmst,
 klickst du in der Live-Ansicht (oder Mini-Ansicht) auf **„LAS an bis 18:00“**. Der Filter
 sorgt dann in PagerDuty für jedes Gerät mit PagerDuty-App für eine Push-Regel (sofort, hohe
-Dringlichkeit); schon vorhandene Push-Regeln übernimmt er, statt doppelte anzulegen. Um
+Dringlichkeit); schon vorhandene Push-Regeln (auch verzögerte) löscht er und legt eine
+sofortige neu an. Um
 `LAS_END_HOUR` (Standard 18 Uhr) löscht er diese Push-Regeln wieder, auch wenn er
 zwischendurch aus war (dann beim nächsten Start). Vorher geht es mit **„Ausschalten“**.
 Andere Regeln, z. B. ein Anruf nach 5 Minuten, bleiben immer unangetastet.
