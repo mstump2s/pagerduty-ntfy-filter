@@ -17,6 +17,7 @@ oder Umgebungsvariablen (die haben Vorrang):
   NTFY_TOPIC          dein geheimer ntfy-Topic-Name (Pflicht)
   CUSTOMERS           optional, z.B. "KundeA,KundeB"
   NTFY_SERVER         optional, Standard: https://ntfy.sh
+  NTFY_FALLBACK_SERVER optional, Ersatz-Server (z.B. https://ntfy.sh), falls NTFY_SERVER nicht erreichbar ist
   POLL_SECONDS        optional, Standard: 30
   PD_SERVICE_IDS      optional, kommagetrennt: nur diese Services abfragen
   SERVICE_FILTER      optional, z.B. "CSOC (High)": nur bimmeln, wenn der Service-Name
@@ -94,6 +95,7 @@ def env_bool(name, default):
 PD_API_TOKEN = os.environ.get("PD_API_TOKEN")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+NTFY_FALLBACK_SERVER = os.environ.get("NTFY_FALLBACK_SERVER", "").strip().rstrip("/")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "30"))
 PD_SERVICE_IDS = [s.strip() for s in os.environ.get("PD_SERVICE_IDS", "").split(",") if s.strip()]
 SERVICE_FILTER = [s.strip().lower() for s in os.environ.get("SERVICE_FILTER", "").split(";") if s.strip()]
@@ -800,18 +802,22 @@ def notify(incident, customer, loud=True):
     label = customer or service or "Alarm"
     # ntfy-Topics sind oeffentlich lesbar: mit QUIET nur "Incident", Details in der Live-Ansicht
     body = "Incident" if QUIET else f"{title}\nService: {service}"
-    r = requests.post(
-        f"{NTFY_SERVER}/{topic}",
-        data=body.encode("utf-8"),
-        headers={
-            "Title": "Incident" if QUIET else f"PagerDuty: {label}".encode("utf-8"),
-            "Priority": "urgent" if loud else "low",
-            "Tags": "rotating_light" if loud else "information_source",
-            "Click": url,                  # Tippen oeffnet den Incident
-        },
-        timeout=20,
-    )
-    r.raise_for_status()
+    headers = {
+        "Title": "Incident" if QUIET else f"PagerDuty: {label}".encode("utf-8"),
+        "Priority": "urgent" if loud else "low",
+        "Tags": "rotating_light" if loud else "information_source",
+        "Click": url,                  # Tippen oeffnet den Incident
+    }
+    try:
+        r = requests.post(f"{NTFY_SERVER}/{topic}", data=body.encode("utf-8"), headers=headers, timeout=10)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        if not NTFY_FALLBACK_SERVER or NTFY_FALLBACK_SERVER == NTFY_SERVER:
+            raise
+        log(f"ntfy-Server {NTFY_SERVER} nicht erreichbar ({e}), sende ueber {NTFY_FALLBACK_SERVER}")
+        r = requests.post(f"{NTFY_FALLBACK_SERVER}/{topic}", data=body.encode("utf-8"), headers=headers,
+                          timeout=20)
+        r.raise_for_status()
 
 
 def classify(inc, customers):
