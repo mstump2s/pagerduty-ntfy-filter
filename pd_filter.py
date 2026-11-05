@@ -17,7 +17,10 @@ oder Umgebungsvariablen (die haben Vorrang):
   NTFY_TOPIC          dein geheimer ntfy-Topic-Name (Pflicht)
   CUSTOMERS           optional, z.B. "KundeA,KundeB"
   NTFY_SERVER         optional, Standard: https://ntfy.sh
-  NTFY_FALLBACK_SERVER optional, Ersatz-Server (z.B. https://ntfy.sh), falls NTFY_SERVER nicht erreichbar ist
+  NTFY_FALLBACK_SERVER optional, Ersatz-Server (z.B. https://ntfy.sh), falls NTFY_SERVER nicht erreichbar ist.
+                      Dorthin gehen nie Kundendaten, nur "Incident".
+  NTFY_DETAILS        optional, Standard: false. true = Kunde, Titel und Service an NTFY_SERVER schicken.
+                      Nur fuer einen eigenen, privaten Server (z.B. per Tailscale); bei ntfy.sh ignoriert.
   POLL_SECONDS        optional, Standard: 30
   PD_SERVICE_IDS      optional, kommagetrennt: nur diese Services abfragen
   SERVICE_FILTER      optional, z.B. "CSOC (High)": nur bimmeln, wenn der Service-Name
@@ -42,7 +45,8 @@ oder Umgebungsvariablen (die haben Vorrang):
   LAS_CONTACTS        optional, kommagetrennte IDs der PagerDuty-Kontakte (Geraete, SMS, Anruf, E-Mail),
                       die LAS / "Ohne Ende an" anschalten. Leer = alle Geraete mit PagerDuty-App (Push)
   LAS_URGENCY         optional, Standard: hoch. Fuer welche Dringlichkeit: hoch | niedrig | beide
-Datenschutz ist fest an (QUIET): keine Incident-Titel ins Log, keine Kundendaten an ntfy.
+Datenschutz ist fest an (QUIET): keine Incident-Titel ins Log, keine Kundendaten an ntfy
+(Ausnahme: NTFY_DETAILS=true fuer den eigenen NTFY_SERVER, nie fuer den Ersatz-Server).
   WEB_PORT            optional, Standard: 8790 (Live-Ansicht, nur 127.0.0.1). 0 = aus
   PD_FROM_EMAIL       optional, nur fuer Account-Keys: E-Mail fuer den From-Header beim Ack
 """
@@ -96,6 +100,8 @@ PD_API_TOKEN = os.environ.get("PD_API_TOKEN")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_FALLBACK_SERVER = os.environ.get("NTFY_FALLBACK_SERVER", "").strip().rstrip("/")
+# Details nur an einen eigenen Server, nie an das oeffentliche ntfy.sh
+NTFY_DETAILS = env_bool("NTFY_DETAILS", False) and "ntfy.sh" not in NTFY_SERVER.lower()
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "30"))
 PD_SERVICE_IDS = [s.strip() for s in os.environ.get("PD_SERVICE_IDS", "").split(",") if s.strip()]
 SERVICE_FILTER = [s.strip().lower() for s in os.environ.get("SERVICE_FILTER", "").split(";") if s.strip()]
@@ -800,22 +806,28 @@ def notify(incident, customer, loud=True):
     service = service_name(incident)
     topic = NTFY_TOPIC if loud else (NTFY_TOPIC_SILENT or NTFY_TOPIC)
     label = customer or service or "Alarm"
-    # ntfy-Topics sind oeffentlich lesbar: mit QUIET nur "Incident", Details in der Live-Ansicht
-    body = "Incident" if QUIET else f"{title}\nService: {service}"
-    headers = {
-        "Title": "Incident" if QUIET else f"PagerDuty: {label}".encode("utf-8"),
-        "Priority": "urgent" if loud else "low",
-        "Tags": "rotating_light" if loud else "information_source",
-        "Click": url,                  # Tippen oeffnet den Incident
-    }
+
+    def headers(details):
+        return {
+            "Title": f"PagerDuty: {label}".encode("utf-8") if details else "Incident",
+            "Priority": "urgent" if loud else "low",
+            "Tags": "rotating_light" if loud else "information_source",
+            "Click": url,                  # Tippen oeffnet den Incident
+        }
+
+    def body(details):
+        return (f"{title}\nService: {service}" if details else "Incident").encode("utf-8")
+
     try:
-        r = requests.post(f"{NTFY_SERVER}/{topic}", data=body.encode("utf-8"), headers=headers, timeout=10)
+        r = requests.post(f"{NTFY_SERVER}/{topic}", data=body(NTFY_DETAILS), headers=headers(NTFY_DETAILS),
+                          timeout=10)
         r.raise_for_status()
     except requests.RequestException as e:
         if not NTFY_FALLBACK_SERVER or NTFY_FALLBACK_SERVER == NTFY_SERVER:
             raise
         log(f"ntfy-Server {NTFY_SERVER} nicht erreichbar ({e}), sende ueber {NTFY_FALLBACK_SERVER}")
-        r = requests.post(f"{NTFY_FALLBACK_SERVER}/{topic}", data=body.encode("utf-8"), headers=headers,
+        # Ersatz-Server ist oeffentlich: nie Kundendaten, nur "Incident"
+        r = requests.post(f"{NTFY_FALLBACK_SERVER}/{topic}", data=body(False), headers=headers(False),
                           timeout=20)
         r.raise_for_status()
 
