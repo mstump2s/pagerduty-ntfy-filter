@@ -19,6 +19,10 @@ oder Umgebungsvariablen (die haben Vorrang):
   NTFY_SERVER         optional, Standard: https://ntfy.sh
   NTFY_FALLBACK_SERVER optional, Ersatz-Server (z.B. https://ntfy.sh), falls NTFY_SERVER nicht erreichbar ist.
                       Dorthin gehen nie Kundendaten, nur "Incident".
+  PHONE_ACK_URL       optional, z.B. https://mein-mac.DEIN-TAILNET.ts.net:8443. Gesetzt = Ack-Button in der
+                      Mitteilung (nur ueber NTFY_SERVER, nie ueber den Ersatz). Muss per "tailscale serve"
+                      auf PHONE_ACK_PORT zeigen. Der Schluessel ACK_SECRET wird automatisch angelegt.
+  PHONE_ACK_PORT      optional, Standard: 8791 (nur 127.0.0.1)
   NTFY_DETAILS        optional, Standard: false. true = Kunde, Titel und Service an NTFY_SERVER schicken.
                       Nur fuer einen eigenen, privaten Server (z.B. per Tailscale); bei ntfy.sh ignoriert.
   POLL_SECONDS        optional, Standard: 30
@@ -51,9 +55,12 @@ Datenschutz ist fest an (QUIET): keine Incident-Titel ins Log, keine Kundendaten
   PD_FROM_EMAIL       optional, nur fuer Account-Keys: E-Mail fuer den From-Header beim Ack
 """
 
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import signal
 import sys
 import threading
@@ -123,6 +130,9 @@ if LAS_URGENCY not in ("hoch", "niedrig", "beide"):
 QUIET = True   # immer an, nicht per config.env oder Live-Ansicht abschaltbar
 WEB_PORT = int(os.environ.get("WEB_PORT", "8790") or 0)   # 0 = Live-Ansicht aus
 PD_FROM_EMAIL = os.environ.get("PD_FROM_EMAIL", "").strip()
+PHONE_ACK_URL = os.environ.get("PHONE_ACK_URL", "").strip().rstrip("/")
+PHONE_ACK_PORT = int(os.environ.get("PHONE_ACK_PORT", "8791") or 0)
+PHONE_ACK_HOURS = 24          # so lange gilt ein Ack-Link
 PD_API = "https://api.pagerduty.com"
 DASHBOARD_FILE = BASE_DIR / "dashboard.html"
 MINI_FILE = BASE_DIR / "mini.html"          # kompakte Ansicht fuer das Extension-Popup
@@ -767,6 +777,37 @@ def set_incident_status(incident_id, status):
     return None if r.ok else pd_error_text(r)
 
 
+def apply_status(incident_id, status, kind, label):
+    """Incident in PagerDuty setzen und Live-Ansicht sofort nachziehen. Liefert None oder Fehlertext."""
+    with STATE_LOCK:
+        inc = next((i for i in STATE["incidents"] + STATE["acked"] if i["id"] == incident_id), None)
+    err = set_incident_status(incident_id, status)
+    if err:
+        log(f"{label} fehlgeschlagen ({incident_id}): {err}")
+        add_event("error", f"{label} fehlgeschlagen: {err}")
+        return err
+
+    log(f"{label}: {show(inc['title']) if inc else incident_id}")
+    with STATE_LOCK:
+        STATE["incidents"] = [i for i in STATE["incidents"] if i["id"] != incident_id]
+        STATE["acked"] = [i for i in STATE["acked"] if i["id"] != incident_id]
+        # Sofort oben anzeigen, nicht erst nach der naechsten Abfrage. War es schon von
+        # anderen acknowledged, bleiben deren Namen stehen und ich komme dazu.
+        if status == "acknowledged" and inc:
+            by = [a for a in inc.get("acked_by") or [] if not a.get("me")]
+            STATE["acked"].insert(0, {k: inc.get(k) for k in ("id", "title", "service", "url", "customer")}
+                                  | {"acked_at": datetime.now(TZ).isoformat(), "mine": True,
+                                     "acked_by": by + [{"name": MY_USER_NAME or "ich", "me": True}],
+                                     "assigned": inc.get("assigned") or []})
+    if inc:
+        add_event(kind, f"✓ {label}",
+                  {"title": inc["title"], "service": {"summary": inc["service"]}, "html_url": inc["url"]},
+                  inc.get("customer"))
+    else:
+        add_event(kind, f"✓ {label} ({incident_id})")
+    return None
+
+
 def service_name(incident):
     return (incident.get("service") or {}).get("summary", "")
 
@@ -798,6 +839,26 @@ def match_customer(title, customers):
     return None
 
 
+def ack_secret():
+    """Schluessel fuer die Ack-Links aus der Mitteilung; wird beim ersten Mal angelegt."""
+    key = os.environ.get("ACK_SECRET", "").strip()
+    if not key:
+        key = secrets.token_hex(32)
+        write_config({"ACK_SECRET": key})
+        os.environ["ACK_SECRET"] = key
+    return key
+
+
+def ack_sig(incident_id, expires):
+    msg = f"{incident_id}:{expires}".encode()
+    return hmac.new(ack_secret().encode(), msg, hashlib.sha256).hexdigest()[:32]
+
+
+def ack_link(incident_id):
+    expires = int(time.time()) + PHONE_ACK_HOURS * 3600
+    return f"{PHONE_ACK_URL}/ack/{incident_id}/{expires}/{ack_sig(incident_id, expires)}"
+
+
 def notify(incident, customer, loud=True):
     """loud=True: Prioritaet 'urgent' (lauter Alarm).
     loud=False: Prioritaet 'low' (nur Mitteilung, kein Ton), optional auf eigenes Topic."""
@@ -807,19 +868,23 @@ def notify(incident, customer, loud=True):
     topic = NTFY_TOPIC if loud else (NTFY_TOPIC_SILENT or NTFY_TOPIC)
     label = customer or service or "Alarm"
 
-    def headers(details):
-        return {
+    def headers(details, ack_button=False):
+        h = {
             "Title": f"PagerDuty: {label}".encode("utf-8") if details else "Incident",
             "Priority": "urgent" if loud else "low",
             "Tags": "rotating_light" if loud else "information_source",
             "Click": url,                  # Tippen oeffnet den Incident
         }
+        if ack_button:
+            h["Actions"] = f"http, Ack, {ack_link(incident['id'])}, method=POST, clear=true"
+        return h
 
     def body(details):
         return (f"{title}\nService: {service}" if details else "Incident").encode("utf-8")
 
     try:
-        r = requests.post(f"{NTFY_SERVER}/{topic}", data=body(NTFY_DETAILS), headers=headers(NTFY_DETAILS),
+        r = requests.post(f"{NTFY_SERVER}/{topic}", data=body(NTFY_DETAILS),
+                          headers=headers(NTFY_DETAILS, ack_button=bool(PHONE_ACK_URL and incident.get("id"))),
                           timeout=10)
         r.raise_for_status()
     except requests.RequestException as e:
@@ -1004,32 +1069,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not ID_RE.match(incident_id):
             return self._json(400, {"error": "ungueltige Incident-ID"})
 
-        with STATE_LOCK:
-            inc = next((i for i in STATE["incidents"] + STATE["acked"] if i["id"] == incident_id), None)
-        err = set_incident_status(incident_id, status)
+        err = apply_status(incident_id, status, kind, label)
         if err:
-            log(f"{label} fehlgeschlagen ({incident_id}): {err}")
-            add_event("error", f"{label} fehlgeschlagen: {err}")
             return self._json(502, {"error": err})
-
-        log(f"{label}: {show(inc['title']) if inc else incident_id}")
-        with STATE_LOCK:
-            STATE["incidents"] = [i for i in STATE["incidents"] if i["id"] != incident_id]
-            STATE["acked"] = [i for i in STATE["acked"] if i["id"] != incident_id]
-            # Sofort oben anzeigen, nicht erst nach der naechsten Abfrage. War es schon von
-            # anderen acknowledged, bleiben deren Namen stehen und ich komme dazu.
-            if status == "acknowledged" and inc:
-                by = [a for a in inc.get("acked_by") or [] if not a.get("me")]
-                STATE["acked"].insert(0, {k: inc.get(k) for k in ("id", "title", "service", "url", "customer")}
-                                      | {"acked_at": datetime.now(TZ).isoformat(), "mine": True,
-                                         "acked_by": by + [{"name": MY_USER_NAME or "ich", "me": True}],
-                                         "assigned": inc.get("assigned") or []})
-        if inc:
-            add_event(kind, f"✓ {label}",
-                      {"title": inc["title"], "service": {"summary": inc["service"]}, "html_url": inc["url"]},
-                      inc.get("customer"))
-        else:
-            add_event(kind, f"✓ {label} ({incident_id})")
         self._json(200, {"ok": True})
 
     def log_message(self, *args):
@@ -1049,6 +1091,65 @@ def start_dashboard():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"Live-Ansicht: http://localhost:{WEB_PORT}")
     paw_exchange.start_auto()   # neue PAW-Uploads auch ohne offene Seite automatisch starten
+
+
+class PhoneAckHandler(BaseHTTPRequestHandler):
+    """Nur fuer den Ack-Button in der ntfy-Mitteilung: POST /ack/<id>/<ablauf>/<signatur>.
+    Laeuft auf 127.0.0.1 und ist nur per "tailscale serve" im eigenen Tailnet erreichbar."""
+
+    def _reply(self, code, text):
+        data = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        self._reply(405, "nur POST")
+
+    def do_POST(self):
+        parts = self.path.strip("/").split("/")
+        if len(parts) != 4 or parts[0] != "ack" or not ID_RE.match(parts[1]) or not parts[2].isdigit():
+            return self._reply(404, "unbekannt")
+        incident_id, expires, sig = parts[1], int(parts[2]), parts[3]
+        if not hmac.compare_digest(sig, ack_sig(incident_id, expires)):
+            log("Handy-Ack mit falscher Signatur abgelehnt")
+            return self._reply(403, "falsche Signatur")
+        if time.time() > expires:
+            phone_feedback("Ack-Link abgelaufen, bitte in PagerDuty bestaetigen")
+            return self._reply(410, "abgelaufen")
+        err = apply_status(incident_id, "acknowledged", "ack", "Acknowledged (Handy)")
+        phone_feedback(f"Ack fehlgeschlagen: {err}" if err else "Acknowledged")
+        self._reply(502 if err else 200, err or "ok")
+
+    def log_message(self, *args):
+        pass
+
+
+def phone_feedback(text):
+    """Leise Rueckmeldung nach dem Ack-Button, nur ueber den eigenen Server."""
+    try:
+        requests.post(f"{NTFY_SERVER}/{NTFY_TOPIC_SILENT or NTFY_TOPIC}", data=text.encode("utf-8"),
+                      headers={"Title": "PagerDuty", "Priority": "low",
+                               "Tags": "white_check_mark" if text == "Acknowledged" else "warning"},
+                      timeout=10)
+    except requests.RequestException as e:
+        log(f"Rueckmeldung ans Handy fehlgeschlagen: {e}")
+
+
+def start_phone_ack():
+    if not PHONE_ACK_URL or not PHONE_ACK_PORT:
+        return
+    ack_secret()   # Schluessel vor dem ersten Alarm anlegen
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", PHONE_ACK_PORT), PhoneAckHandler)
+    except OSError as e:
+        log(f"Handy-Ack nicht gestartet: Port {PHONE_ACK_PORT} ist belegt ({e.strerror})")
+        add_event("error", f"Handy-Ack: Port {PHONE_ACK_PORT} belegt")
+        return
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log(f"Handy-Ack: {PHONE_ACK_URL} -> 127.0.0.1:{PHONE_ACK_PORT}")
 
 
 # ---------- Hauptschleife ----------
@@ -1141,6 +1242,7 @@ def main():
         STATE["las"] = las_view(load_las())
     add_event("info", "Filter eingeschaltet")
     start_dashboard()
+    start_phone_ack()
 
     paused = None
     while True:
