@@ -1123,7 +1123,8 @@ class PhoneAckHandler(BaseHTTPRequestHandler):
             phone_feedback("Ack-Link abgelaufen, bitte in PagerDuty bestaetigen", topic)
             return self._reply(410, "abgelaufen")
         err = apply_status(incident_id, "acknowledged", "ack", "Acknowledged (Handy)")
-        phone_feedback(f"Ack fehlgeschlagen: {err}" if err else "Acknowledged", topic)
+        if err:   # Erfolg braucht keine Mitteilung, nur Fehler melden
+            phone_feedback(f"Ack fehlgeschlagen: {err}", topic)
         self._reply(502 if err else 200, err or "ok")
 
     def log_message(self, *args):
@@ -1131,11 +1132,11 @@ class PhoneAckHandler(BaseHTTPRequestHandler):
 
 
 def phone_feedback(text, topic=None):
-    """Leise Rueckmeldung nach dem Ack-Button ins Topic des Alarms, nur ueber den eigenen Server."""
+    """Leise Fehlermeldung nach dem Ack-Button ins Topic des Alarms, nur ueber den eigenen Server."""
     try:
         requests.post(f"{NTFY_SERVER}/{topic or NTFY_TOPIC}", data=text.encode("utf-8"),
                       headers={"Title": "PagerDuty", "Priority": "low",
-                               "Tags": "white_check_mark" if text == "Acknowledged" else "warning"},
+                               "Tags": "warning"},
                       timeout=10)
     except requests.RequestException as e:
         log(f"Rueckmeldung ans Handy fehlgeschlagen: {e}")
