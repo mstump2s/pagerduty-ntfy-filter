@@ -854,9 +854,10 @@ def ack_sig(incident_id, expires):
     return hmac.new(ack_secret().encode(), msg, hashlib.sha256).hexdigest()[:32]
 
 
-def ack_link(incident_id):
+def ack_link(incident_id, loud=True):
+    """?t=s: Rueckmeldung ins leise Topic, sonst ins laute (dahin, wo der Alarm stand)."""
     expires = int(time.time()) + PHONE_ACK_HOURS * 3600
-    return f"{PHONE_ACK_URL}/ack/{incident_id}/{expires}/{ack_sig(incident_id, expires)}"
+    return f"{PHONE_ACK_URL}/ack/{incident_id}/{expires}/{ack_sig(incident_id, expires)}" + ("" if loud else "?t=s")
 
 
 def notify(incident, customer, loud=True):
@@ -876,7 +877,7 @@ def notify(incident, customer, loud=True):
             "Click": url,                  # Tippen oeffnet den Incident
         }
         if ack_button:
-            h["Actions"] = f"http, Ack, {ack_link(incident['id'])}, method=POST, clear=true"
+            h["Actions"] = f"http, Ack, {ack_link(incident['id'], loud)}, method=POST, clear=true"
         return h
 
     def body(details):
@@ -1109,7 +1110,9 @@ class PhoneAckHandler(BaseHTTPRequestHandler):
         self._reply(405, "nur POST")
 
     def do_POST(self):
-        parts = self.path.strip("/").split("/")
+        path, _, query = self.path.partition("?")
+        topic = (NTFY_TOPIC_SILENT or NTFY_TOPIC) if query == "t=s" else NTFY_TOPIC
+        parts = path.strip("/").split("/")
         if len(parts) != 4 or parts[0] != "ack" or not ID_RE.match(parts[1]) or not parts[2].isdigit():
             return self._reply(404, "unbekannt")
         incident_id, expires, sig = parts[1], int(parts[2]), parts[3]
@@ -1117,20 +1120,20 @@ class PhoneAckHandler(BaseHTTPRequestHandler):
             log("Handy-Ack mit falscher Signatur abgelehnt")
             return self._reply(403, "falsche Signatur")
         if time.time() > expires:
-            phone_feedback("Ack-Link abgelaufen, bitte in PagerDuty bestaetigen")
+            phone_feedback("Ack-Link abgelaufen, bitte in PagerDuty bestaetigen", topic)
             return self._reply(410, "abgelaufen")
         err = apply_status(incident_id, "acknowledged", "ack", "Acknowledged (Handy)")
-        phone_feedback(f"Ack fehlgeschlagen: {err}" if err else "Acknowledged")
+        phone_feedback(f"Ack fehlgeschlagen: {err}" if err else "Acknowledged", topic)
         self._reply(502 if err else 200, err or "ok")
 
     def log_message(self, *args):
         pass
 
 
-def phone_feedback(text):
-    """Leise Rueckmeldung nach dem Ack-Button, nur ueber den eigenen Server."""
+def phone_feedback(text, topic=None):
+    """Leise Rueckmeldung nach dem Ack-Button ins Topic des Alarms, nur ueber den eigenen Server."""
     try:
-        requests.post(f"{NTFY_SERVER}/{NTFY_TOPIC_SILENT or NTFY_TOPIC}", data=text.encode("utf-8"),
+        requests.post(f"{NTFY_SERVER}/{topic or NTFY_TOPIC}", data=text.encode("utf-8"),
                       headers={"Title": "PagerDuty", "Priority": "low",
                                "Tags": "white_check_mark" if text == "Acknowledged" else "warning"},
                       timeout=10)
