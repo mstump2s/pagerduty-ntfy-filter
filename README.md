@@ -15,7 +15,7 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   Live-Ansicht pflegbar. Optionaler Service-Filter,
   z. B. nur `CSOC (High)` laut.
 - **Laut oder leise:** Laute Alarme mit ntfy-Priorität *urgent*. Leise Mitteilungen
-  als Pop-up mit Priorität *high*, kein Dauer-Alarm, optional auf einem eigenen Topic.
+  ohne Ton, optional auf einem eigenen Topic.
 - **Kein Doppel-Alarm:** Jeder Incident wird nur einmal gemeldet, auch nach einem Neustart.
 - **Live-Ansicht** (`http://localhost:8790`, nur lokal erreichbar):
   - oben die offenen Incidents deiner Kunden, darunter die acknowledged (von dir und
