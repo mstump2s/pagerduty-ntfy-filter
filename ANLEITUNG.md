@@ -3,7 +3,7 @@
 Fragt PagerDuty regelmäßig nach offenen (triggered) Incidents ab und schickt dir
 per [ntfy](https://ntfy.sh) einen **lauten** Push nur dann, wenn einer deiner Kunden im
 Titel steht **und** der Service passt (Standard: `CSOC (High)`). Andere Incidents
-kommen auf Wunsch als **leise** Mitteilung (ohne Ton) oder werden ignoriert.
+kommen auf Wunsch als **leise** Mitteilung (Pop-up, Priorität *high*, kein Dauer-Alarm) oder werden ignoriert.
 Dazu gibt es eine Live-Ansicht im Browser mit Ack- und Resolve-Buttons.
 
 Voraussetzung: Python 3.9 oder neuer. `requests` wird beim ersten Start automatisch

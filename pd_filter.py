@@ -30,7 +30,7 @@ oder Umgebungsvariablen (die haben Vorrang):
   SERVICE_FILTER      optional, z.B. "CSOC (High)": nur bimmeln, wenn der Service-Name
                       diesen Text enthaelt (Gross-/Kleinschreibung egal, mehrere mit ";").
                       Leer = alle Services.
-  SILENT_FOR          optional, wofuer eine leise Mitteilung (ohne Ton) kommt:
+  SILENT_FOR          optional, wofuer eine leise Mitteilung (Pop-up, kein Alarm) kommt:
                         kunden = deine Kunden, wenn der Service nicht passt (Standard)
                         alle   = zusaetzlich alle anderen Incidents
                         keine  = nur die lauten Alarme
@@ -862,7 +862,7 @@ def ack_link(incident_id, loud=True):
 
 def notify(incident, customer, loud=True):
     """loud=True: Prioritaet 'urgent' (lauter Alarm).
-    loud=False: Prioritaet 'low' (nur Mitteilung, kein Ton), optional auf eigenes Topic."""
+    loud=False: Prioritaet 'high' (Pop-up, kein Dauer-Alarm), optional auf eigenes Topic."""
     title = incident.get("title", "(ohne Titel)")
     url = incident.get("html_url", "")
     service = service_name(incident)
@@ -872,7 +872,7 @@ def notify(incident, customer, loud=True):
     def headers(details, ack_button=False):
         h = {
             "Title": f"PagerDuty: {label}".encode("utf-8") if details else "Incident",
-            "Priority": "urgent" if loud else "low",
+            "Priority": "urgent" if loud else "high",   # high = Pop-up auf dem Handy
             "Tags": "rotating_light" if loud else "information_source",
             "Click": url,                  # Tippen oeffnet den Incident
         }
@@ -1295,7 +1295,7 @@ def test_title(title, service):
     if decision == "alarm":
         print(f"-> LAUT (Kunde: {customer})")
     elif wants_silent(decision, customer):
-        print(f"-> LEISE Mitteilung ohne Ton ({'Kunde: ' + customer if customer else 'kein Kunde'}, "
+        print(f"-> LEISE Mitteilung als Pop-up ({'Kunde: ' + customer if customer else 'kein Kunde'}, "
               f"{'Service passt nicht' if decision == 'service' else 'Service passt'})")
     elif decision == "service":
         print("-> ignoriert: Service passt nicht zum Service-Filter")
