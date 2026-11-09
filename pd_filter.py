@@ -81,6 +81,7 @@ CUSTOMERS_FILE = BASE_DIR / "customers.txt"
 SEEN_FILE = BASE_DIR / "seen.json"
 OVERRIDES_FILE = BASE_DIR / "overrides.json"
 LAS_FILE = BASE_DIR / "las.json"
+STATS_FILE = BASE_DIR / "stats.json"   # live mitgezaehlte Acks pro Person
 CONFIG_FILE = BASE_DIR / "config.env"
 
 
@@ -150,6 +151,7 @@ STATE = {
     "service_filter": SERVICE_FILTER,
     "incidents": [],            # aktuell offene Incidents mit Entscheidung
     "acked": [],                # acknowledged: meine Kunden (von allen) + von mir (oder alle, wenn eigener User unbekannt)
+    "acked_others": [],         # acknowledged von anderen bei Kunden, die nicht meine sind (nur Anzeige)
     "acked_mine": False,        # True = "acked" ist auf meinen User gefiltert
     "shift": None,              # aktuelle Schicht: {"schedules": [...], "end": ISO-Zeit}
     "override_user": OVERRIDE_USER,
@@ -538,6 +540,99 @@ def hand_over_shift():
     return None, f"On-Call an {OVERRIDE_USER} uebergeben: " + ", ".join(done)
 
 
+OVERRIDE_MAX_DAYS = 90   # PagerDuty liefert On-Call-Zeiten nur fuer hoechstens 90 Tage am Stueck
+
+
+def fetch_my_oncalls(since, until):
+    """Alle meine Schichten, die im Zeitraum beginnen oder schon laufen, je Schedule (doppelte zusammengefasst).
+    Eine Schicht, die im Zeitraum beginnt, zaehlt ganz, auch wenn sie danach endet (z.B. Bereitschaft
+    Fr 18:00 bis Sa 02:30). PagerDuty schneidet am Abfrage-Ende ab, deshalb 3 Tage weiter fragen."""
+    shifts, offset = {}, 0
+    query_until = until + timedelta(days=3)
+    while True:
+        r = requests.get(f"{PD_API}/oncalls", headers=PD_HEADERS, timeout=20,
+                         params={"user_ids[]": MY_USER_ID, "since": since.isoformat(),
+                                 "until": query_until.isoformat(), "limit": 100, "offset": offset})
+        r.raise_for_status()
+        data = r.json()
+        page = data.get("oncalls", [])
+        for o in page:
+            if not o.get("schedule"):
+                continue   # direkt in der Eskalation, ohne Schedule: kein Override moeglich
+            real_start = parse_time(o["start"]) if o.get("start") else since
+            if real_start >= until:
+                continue   # beginnt erst nach dem Zeitraum
+            start = max(since, real_start)
+            end = parse_time(o["end"]) if o.get("end") else query_until
+            if end > start:
+                shifts[(o["schedule"]["id"], start, end)] = o["schedule"].get("summary", "")
+        if not data.get("more") or not page:
+            return shifts
+        offset += len(page)
+
+
+def hand_over_period(day_from, day_to):
+    """Alle meine Schichten vom Tag day_from (00:00) bis einschliesslich day_to (24:00) an OVERRIDE_USER
+    geben, z.B. fuer Urlaub. Nur die Zeiten, in denen ich wirklich dran bin, damit andere in gemeinsamen
+    Schedules nicht ueberschrieben werden. Liefert (Fehlertext oder None, Beschreibung)."""
+    if not OVERRIDE_USER:
+        return "OVERRIDE_USER ist nicht gesetzt", ""
+    try:
+        d_from = datetime.strptime(day_from, "%Y-%m-%d").date()
+        d_to = datetime.strptime(day_to, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return "Bitte gueltige Daten angeben", ""
+    if d_to < d_from:
+        return "Das Ende liegt vor dem Anfang", ""
+    if (d_to - d_from).days + 1 > OVERRIDE_MAX_DAYS:
+        return f"Hoechstens {OVERRIDE_MAX_DAYS} Tage am Stueck", ""
+    now = datetime.now(TZ).replace(microsecond=0)
+    since = max(now, datetime.combine(d_from, datetime.min.time(), TZ))
+    until = datetime.combine(d_to + timedelta(days=1), datetime.min.time(), TZ)
+    if until <= now:
+        return "Der Zeitraum liegt in der Vergangenheit", ""
+    if MY_USER_ID is None:
+        find_my_user_id()
+    if not MY_USER_ID:
+        return "Eigener PagerDuty-User unbekannt (bei Account-Key PD_FROM_EMAIL setzen)", ""
+    headers = pd_write_headers()
+    overrides = load_overrides()
+    try:
+        shifts = fetch_my_oncalls(since, until)
+        if not shifts:
+            return f"Keine Schichten von dir zwischen {d_from:%d.%m.} und {d_to:%d.%m.%Y}", ""
+        user_id = find_user_id(OVERRIDE_USER)
+        if not user_id:
+            return f"PagerDuty-User {OVERRIDE_USER!r} nicht gefunden", ""
+        by_schedule = {}
+        for (schedule_id, start, end), name in sorted(shifts.items(), key=lambda kv: kv[0][1]):
+            by_schedule.setdefault(schedule_id, {"name": name, "items": []})["items"].append((start, end))
+        count = 0
+        for schedule_id, sched in by_schedule.items():
+            r = requests.post(f"{PD_API}/schedules/{schedule_id}/overrides", headers=headers, timeout=30,
+                              json={"overrides": [{"start": a.isoformat(), "end": b.isoformat(),
+                                                   "user": {"id": user_id, "type": "user_reference"}}
+                                                  for a, b in sched["items"]]})
+            if not r.ok:
+                return f"{sched['name']}: {pd_error_text(r)}" + (f" ({count} Schichten schon uebergeben)" if count else ""), ""
+            body = r.json()
+            for item, (a, b) in zip(body if isinstance(body, list) else [body], sched["items"]):
+                if item.get("status", 201) >= 300:
+                    return (f"{sched['name']}: {'; '.join(item.get('errors') or ['abgelehnt'])}"
+                            + (f" ({count} Schichten schon uebergeben)" if count else "")), ""
+                if item.get("override", {}).get("id"):
+                    overrides.append({"schedule_id": schedule_id, "schedule": sched["name"],
+                                      "id": item["override"]["id"], "start": a.isoformat(), "end": b.isoformat()})
+                    save_overrides(overrides)
+                    count += 1
+    except (requests.RequestException, KeyError, ValueError) as e:
+        return f"PagerDuty-Fehler: {e}", ""
+    _ON_CALL_CACHE["at"] = 0.0
+    names = ", ".join(sorted({v for v in shifts.values()}))
+    return None, (f"{count} Schicht{'en' if count != 1 else ''} vom {d_from:%d.%m.} bis {d_to:%d.%m.%Y} "
+                  f"an {OVERRIDE_USER} uebergeben ({names})")
+
+
 def take_back_shift():
     """Meine Overrides loeschen, die Schicht gehoert dann wieder mir. Laeuft ein Override schon,
     kuerzt PagerDuty ihn auf jetzt. Liefert (Fehlertext oder None, Beschreibung)."""
@@ -720,16 +815,88 @@ def end_las_if_due():
     add_event("error" if err else "info", err or text)
 
 
-def fetch_acked(customers, all_mine=False):
+# ---------- Statistik: wer hat wie viele Incidents acknowledged ----------
+
+STATS_LOCK = threading.Lock()
+STATS_KEEP_IDS_DAYS = 14   # so lange merken, welche Incidents schon gezaehlt sind
+
+
+def load_stats():
+    try:
+        data = json.loads(STATS_FILE.read_text(encoding="utf-8"))
+        return {"days": data.get("days") or {}, "counted": data.get("counted") or {}}
+    except (FileNotFoundError, ValueError):
+        return {"days": {}, "counted": {}}
+
+
+def severity(inc):
+    if (inc.get("title") or "").lower().startswith("customer response received"):
+        return "response"   # Kundenantworten extra, egal aus welchem Service
+    name = service_name(inc).lower()
+    return "high" if "high" in name else "medium" if "medium" in name else "other"
+
+
+def count_acks(incidents):
+    """Jeden acknowledged Incident einmal zaehlen: fuer die Person, die als erste acknowledged hat."""
+    with STATS_LOCK:
+        stats = load_stats()
+        changed = False
+        for inc in incidents:
+            acks = [a for a in inc.get("acknowledgements") or [] if a.get("at")]
+            if not acks or inc["id"] in stats["counted"]:
+                continue
+            first = min(acks, key=lambda a: a["at"])
+            who = (first.get("acknowledger") or {}).get("summary") or "?"
+            day = parse_time(first["at"]).astimezone(TZ).date().isoformat()
+            person = stats["days"].setdefault(day, {}).setdefault(who, {})
+            sev = severity(inc)
+            person[sev] = person.get(sev, 0) + 1
+            stats["counted"][inc["id"]] = day
+            changed = True
+        if not changed:
+            return
+        cutoff = (datetime.now(TZ).date() - timedelta(days=STATS_KEEP_IDS_DAYS)).isoformat()
+        stats["counted"] = {i: d for i, d in stats["counted"].items() if d >= cutoff}
+        tmp = STATS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(STATS_FILE)
+
+
+def stats_view():
+    """Summen pro Person fuer heute, 7 Tage, 30 Tage und alles."""
+    with STATS_LOCK:
+        days = load_stats()["days"]
+    today = datetime.now(TZ).date()
+    periods = {"today": today, "7": today - timedelta(days=6), "30": today - timedelta(days=29), "all": None}
+    out = {"since": min(days) if days else None, "periods": {}}
+    for key, start in periods.items():
+        sums = {}
+        for day, people in days.items():
+            if start and day < start.isoformat():
+                continue
+            for who, n in people.items():
+                row = sums.setdefault(who, {"name": who, "high": 0, "medium": 0, "response": 0, "other": 0})
+                for sev, c in n.items():
+                    row[sev] = row.get(sev, 0) + c
+        for r in sums.values():
+            r["total"] = r["high"] + r["medium"] + r["other"]   # Customer Responses zaehlen nicht mit
+        rows = sorted(sums.values(), key=lambda r: (-r["total"], -r["response"], r["name"]))
+        for r in rows:
+            r["me"] = bool(MY_USER_NAME) and r["name"] == MY_USER_NAME
+        out["periods"][key] = rows
+    return out
+
+
+def fetch_acked(customers, all_mine=False, incidents=None):
     """Acknowledged Incidents meiner Kunden (egal von wem) plus alle, die ich acknowledged habe.
-    Bei LAS/"Ohne Ende an" (all_mine) und ohne bekannte eigene User-ID: alle acknowledged Incidents."""
-    acked = []
-    for inc in fetch_incidents("acknowledged"):
+    Bei LAS/"Ohne Ende an" (all_mine) und ohne bekannte eigene User-ID: alle acknowledged Incidents.
+    Liefert (acked, others): others = der Rest, nur zum Anzeigen, wer was acknowledged hat."""
+    acked, others = [], []
+    for inc in fetch_incidents("acknowledged") if incidents is None else incidents:
         customer = match_customer(inc.get("title", ""), customers)
         acks = inc.get("acknowledgements") or []
         mine = bool(MY_USER_ID) and any((a.get("acknowledger") or {}).get("id") == MY_USER_ID for a in acks)
-        if MY_USER_ID and not mine and not customer and not all_mine:
-            continue
+        target = others if MY_USER_ID and not mine and not customer and not all_mine else acked
         by, by_ids = [], set()
         for a in acks:
             who = a.get("acknowledger") or {}
@@ -739,7 +906,7 @@ def fetch_acked(customers, all_mine=False):
             by.append({"name": who.get("summary") or "?", "me": who.get("id") == MY_USER_ID})
         assigned = [(a.get("assignee") or {}).get("summary") for a in inc.get("assignments") or []]
         last = (acks or [{}])[-1]
-        acked.append({
+        target.append({
             "id": inc["id"],
             "title": inc.get("title", ""),
             "service": service_name(inc),
@@ -750,7 +917,9 @@ def fetch_acked(customers, all_mine=False):
             "assigned": [a for a in assigned if a],
             "acked_at": last.get("at") or inc.get("updated_at") or inc.get("created_at", ""),
         })
-    return sorted(acked, key=lambda a: a["acked_at"], reverse=True)
+    def newest_first(items):
+        return sorted(items, key=lambda a: a["acked_at"], reverse=True)
+    return newest_first(acked), newest_first(others)
 
 
 def pd_error_text(r):
@@ -971,6 +1140,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 data = dict(STATE, events=list(EVENTS))
             # Bei LAS / "Ohne Ende an" uebernehme ich alle Kunden -> alle Incidents zaehlen als meine
             data["all_mine"] = bool(data.get("las"))
+            data["stats"] = stats_view()
             return self._send(200, json.dumps(data).encode("utf-8"), "application/json")
         self._send(404, b"nicht gefunden", "text/plain; charset=utf-8")
 
@@ -1011,7 +1181,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             add_event("info", text)
             return self._json(200, {"ok": True, "text": text})
         if self.path not in ACTIONS and self.path not in (
-                "/api/customers/add", "/api/customers/remove", "/api/settings", "/api/paw/analyze", "/api/paw/done", "/api/paw/stop"):
+                "/api/override/period", "/api/customers/add", "/api/customers/remove", "/api/settings", "/api/paw/analyze", "/api/paw/done", "/api/paw/stop"):
             return self._json(404, {"error": "nicht gefunden"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -1022,6 +1192,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 raise ValueError
         except (ValueError, AttributeError):
             return self._json(400, {"error": "ungueltige Anfrage"})
+
+        if self.path == "/api/override/period":
+            err, text = hand_over_period(str(body.get("from", "")), str(body.get("to", "")))
+            if err:
+                log(f"Zeitraum-Uebergabe fehlgeschlagen: {err}")
+                add_event("error", f"Zeitraum-Uebergabe fehlgeschlagen: {err}")
+                return self._json(502, {"error": err})
+            log(text)
+            add_event("info", text)
+            return self._json(200, {"ok": True, "text": text})
 
         if self.path.startswith("/api/paw/"):
             if not paw_exchange.enabled():
@@ -1037,11 +1217,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 err = paw_exchange.done(upload_id)
                 text = f"PAW: Upload geloescht ({upload_id})"
+            # PAW Exchange ist eine eigene Anwendung: nur in deren Log, nicht in pd-filter
             if err:
-                log(f"PAW: {err}")
+                paw_exchange.log(f"PAW: {err}")
                 return self._json(502, {"error": err})
-            log(text)
-            add_event("info", text)
+            paw_exchange.log(text)
             return self._json(200, {"ok": True})
 
         if self.path == "/api/settings":
@@ -1227,9 +1407,14 @@ def poll_once(seen):
         find_my_user_id()
     with STATE_LOCK:
         all_mine = bool(STATE["las"])
-    acked = fetch_acked(customers, all_mine)
+    acked_raw = fetch_incidents("acknowledged")
+    try:
+        count_acks(acked_raw)
+    except Exception as e:
+        log(f"Statistik-Fehler: {e}")
+    acked, acked_others = fetch_acked(customers, all_mine, acked_raw)
     with STATE_LOCK:
-        STATE.update(acked=acked, acked_mine=bool(MY_USER_ID))
+        STATE.update(acked=acked, acked_others=acked_others, acked_mine=bool(MY_USER_ID))
 
 
 def main():
@@ -1269,6 +1454,11 @@ def main():
             # Kundenliste auch in der Pause aktuell halten, sonst bleibt die Live-Ansicht leer
             with STATE_LOCK:
                 STATE["customers"] = load_customers()
+            # Statistik auch in der Pause weiterzaehlen
+            try:
+                count_acks(fetch_incidents("acknowledged"))
+            except Exception:
+                pass   # Netzfehler in der Pause nicht ins Log, naechste Minute neuer Versuch
             time.sleep(60)
             continue
 

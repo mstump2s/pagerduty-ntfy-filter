@@ -4,120 +4,213 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PAW Exchange</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #69727d; --line: #e3e6ea;
-    --ok: #1e8e3e; --err: #d93025; --info: #3367d6; --warn: #8a6d00; --warn-bg: #fff6d6;
+    --bg: #fbfaf7; --panel: #ffffff; --text: #1f2328; --muted: #5d6670; --line: #e4e1d8; --line-soft: #efece4;
+    --head: #f6f4ee;
+    --accent: #0b6e69; --accent-text: #ffffff;
+    --ok: #0b6e69; --err: #b3261e; --info: #2459a8; --warn: #7a5c00; --warn-bg: #fff3cf;
+    --side: #1f2a2e; --side-text: #e8eeee; --side-muted: #b9c6c7; --side-hi: #2f4a4c; --side-tile: #2b383c;
+    --side-accent: #5fd3a6;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #111418; --panel: #1a1e24; --text: #e6e9ed; --muted: #8b949e; --line: #2a3038;
-      --ok: #4cc26f; --err: #ff6b5e; --info: #7aa2ff; --warn: #e5c45a; --warn-bg: #332c12;
+      --bg: #121719; --panel: #1a2124; --text: #e6eaea; --muted: #9aa6a8; --line: #2a3336; --line-soft: #232c2f;
+      --head: #1f272a;
+      --accent: #4fc3b0; --accent-text: #0b1f1d;
+      --ok: #4fc3b0; --err: #ff8a80; --info: #8ab4ff; --warn: #e5c45a; --warn-bg: #332c12;
+      --side: #0e1416; --side-hi: #22393b; --side-tile: #1b2629;
     }
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }
-  h1 { font-size: 18px; margin: 0; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
-       margin: 28px 0 10px; font-weight: 600; }
-  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  header .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
-  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 20%, transparent); }
-  .dot.err { background: var(--err); }
-  .meta { color: var(--muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
-  .meta b { color: var(--text); font-weight: 600; }
-  a { color: var(--info); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+         font: 14px/1.45 "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .mono, td.time, td.num, .tile .n, .u-head .when, .auto { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .app { display: flex; flex-wrap: wrap; min-height: 100vh; }
+  .side { flex: 1 1 240px; max-width: 290px; background: var(--side); color: var(--side-text);
+          padding: 22px 16px; display: flex; flex-direction: column; gap: 24px; }
+  @media (max-width: 820px) { .side { max-width: none; } }
+  .content { flex: 999 1 560px; min-width: 0; padding: 24px 28px 60px; display: flex; flex-direction: column; gap: 22px; }
+
+  .brand { display: flex; flex-direction: column; gap: 4px; }
+  .brand h1 { font-size: 17px; margin: 0; font-weight: 700; }
+  .brand .line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--side-muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--side-muted); flex: none; }
+  .dot.on { background: var(--side-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--side-accent) 20%, transparent); }
+  .dot.err { background: #ff8a80; }
+  .side-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--side-muted);
+                margin: 0 0 8px; font-weight: 600; }
+  .side a { color: #8fe0c2; text-decoration: none; font-weight: 500; }
+  .side a:hover { text-decoration: underline; }
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .tile { background: var(--side-tile); border-radius: 8px; padding: 10px 12px; }
+  .tile .n { font-size: 22px; font-weight: 500; line-height: 1.2; }
+  .tile .l { color: var(--side-muted); font-size: 12px; }
+  .tile.hot { background: var(--side-hi); }
+  .tile.hot .n { color: var(--side-accent); }
+  .tile.wide { grid-column: 1 / -1; }
+  .side-block { display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--side-muted); }
+  .side-block b { color: var(--side-text); font-weight: 600; }
+  .side .btn { background: var(--side-tile); color: var(--side-text); border-color: transparent; align-self: flex-start; }
+  .side .btn:hover { border-color: var(--side-accent); color: var(--side-accent); }
+  .switch { display: flex; background: var(--side-tile); border-radius: 9px; padding: 3px; gap: 3px; }
+  .switch a { flex: 1; text-align: center; padding: 7px 8px; border-radius: 7px; font-size: 13px; font-weight: 500;
+              color: var(--side-muted); text-decoration: none; }
+  .switch a:hover { color: var(--side-text); text-decoration: none; background: color-mix(in srgb, var(--side-hi) 60%, transparent); }
+  .switch a[aria-current="page"] { background: var(--side-hi); color: var(--side-text); font-weight: 600; }
+
+  h2 { font-size: 16px; margin: 6px 0 0; font-weight: 600; }
+  h2 .sub, .h-sum { color: var(--muted); font-weight: 400; }
+  section { display: flex; flex-direction: column; gap: 10px; }
+  .content a { color: var(--accent); text-decoration: none; }
+  .content a:hover { text-decoration: underline; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .wrap { overflow-x: auto; }
   .empty { padding: 18px; color: var(--muted); text-align: center; }
   .error { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); border-radius: 8px;
-           padding: 10px 14px; margin-top: 14px; white-space: pre-wrap; }
+           padding: 10px 14px; white-space: pre-wrap; }
+  .meta { color: var(--muted); font-size: 12px; }
   .uploads { display: grid; gap: 12px; }
-  .upload { padding: 14px 16px; display: grid; gap: 10px; }
-  .upload.new { box-shadow: inset 3px 0 0 var(--info); }
+  .upload { padding: 16px 18px; display: grid; gap: 12px; }
+  .upload.new { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .u-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .u-head strong { font-size: 15px; overflow-wrap: anywhere; }
-  .u-head .when { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .u-head .when { color: var(--muted); font-size: 12px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
-  .b-new { background: color-mix(in srgb, var(--info) 15%, transparent); color: var(--info); }
+  .b-new { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
   .b-run { background: var(--warn-bg); color: var(--warn); }
-  .b-done { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
-  .b-err { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+  .b-done { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+  .b-err { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err); }
+  .b-cost { background: var(--line-soft); color: var(--muted); }
   .files { display: flex; flex-wrap: wrap; gap: 6px; }
-  .file { background: color-mix(in srgb, var(--panel) 85%, var(--line)); border-radius: 6px; padding: 1px 8px; font-size: 12px;
-          overflow-wrap: anywhere; }
+  .file { background: var(--line-soft); border-radius: 6px; padding: 2px 8px; font-size: 12px; overflow-wrap: anywhere; }
   .file span { color: var(--muted); }
-  .instr { white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid var(--line); padding: 2px 0 2px 10px; }
+  .instr { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--head); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
   .instr.none { color: var(--muted); font-style: italic; }
-  .note { font: inherit; font-size: 13px; width: 100%; min-height: 54px; resize: vertical; padding: 6px 8px; border-radius: 6px;
+  .note { font: inherit; font-size: 13px; width: 100%; min-height: 54px; resize: vertical; padding: 7px 9px; border-radius: 7px;
           border: 1px solid var(--line); background: var(--panel); color: var(--text); }
   .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+  .btn { font: inherit; font-size: 13px; padding: 6px 13px; border-radius: 7px; cursor: pointer;
          border: 1px solid var(--line); background: var(--panel); color: var(--text); white-space: nowrap; }
-  .btn:hover { border-color: var(--info); color: var(--info); }
-  .btn.primary { background: var(--info); border-color: var(--info); color: #fff; font-weight: 600; }
-  .btn.primary:hover { filter: brightness(1.08); color: #fff; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); color: var(--accent-text); }
   .btn.danger:hover, .btn.armed { border-color: var(--err); color: var(--err); }
   .btn:disabled { opacity: .5; cursor: wait; }
-  .auto { color: var(--warn); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .link-btn { font: inherit; font-size: 13px; border: 0; background: none; color: var(--info); cursor: pointer; padding: 0; }
+  .auto { color: var(--warn); font-size: 12px; }
+  .link-btn { font: inherit; font-size: 13px; border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { font-size: 12px; color: var(--muted); font-weight: 600; background: color-mix(in srgb, var(--panel) 92%, var(--line)); }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 500; background: var(--head); }
   tr:last-child td { border-bottom: 0; }
-  td.time { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; width: 1%; }
-  th.num, td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 1%; }
-  .h-sum { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
-  .b-cost { background: color-mix(in srgb, var(--muted) 15%, transparent); color: var(--muted); }
+  td.time { white-space: nowrap; color: var(--muted); font-size: 13px; width: 1%; }
+  th.num, td.num { text-align: right; white-space: nowrap; width: 1%; }
   #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: calc(100% - 32px);
-           padding: 10px 16px; border-radius: 8px; color: #fff; background: var(--ok); font-weight: 600;
+           padding: 10px 16px; border-radius: 8px; color: #fff; background: #0b6e69; font-weight: 600;
            box-shadow: 0 4px 16px rgba(0,0,0,.2); opacity: 0; pointer-events: none; transition: opacity .2s; }
   #toast.show { opacity: 1; }
-  #toast.err { background: var(--err); }
+  #toast.err { background: #b3261e; }
+  @media (max-width: 640px) { .content { padding: 18px 14px 60px; } }
+  /* Einklappen: Abschnitte als <details>, Upload-Karten per Knopf */
+  details.sec > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+  details.sec > summary::-webkit-details-marker { display: none; }
+  details.sec > summary h2 { margin: 0; }
+  details.sec > summary::before { content: ""; width: 7px; height: 7px; border: solid var(--muted); border-width: 0 2px 2px 0;
+                                  transform: rotate(-45deg); transition: transform .15s; flex: none; margin-right: 2px; }
+  details.sec[open] > summary::before { transform: rotate(45deg); }
+  details.sec[open] > summary { margin-bottom: 10px; }
+  .sec-tools { margin-left: auto; display: flex; gap: 8px; }
+  .fold { border: 0; background: none; cursor: pointer; padding: 4px; margin: -4px 0 -4px -4px; color: var(--muted);
+          display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; }
+  .fold:hover { background: var(--line-soft); color: var(--text); }
+  .fold::before { content: ""; width: 7px; height: 7px; border: solid currentColor; border-width: 0 2px 2px 0;
+                  transform: rotate(45deg); transition: transform .15s; }
+  .upload.folded .fold::before { transform: rotate(-45deg); }
+  .upload.folded .body { display: none; }
+  .upload .body { display: grid; gap: 12px; }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <span class="dot" id="dot"></span>
+<div class="app">
+<aside class="side">
+  <nav class="switch" aria-label="Seite">
+    <a href="/">PD-Filter</a>
+    <a href="/paw" aria-current="page">PAW Exchange</a>
+  </nav>
+  <div class="brand">
     <h1>PAW Exchange</h1>
-    <div class="right">
-      <a href="/">← PagerDuty-Filter</a>
-      <button class="btn" id="refresh" type="button">Neu laden</button>
-    </div>
-  </header>
-  <div class="meta">
-    <span>Zuletzt geholt: <b id="updated">–</b></span>
-    <span>Analyse läuft mit: <b>Claude Enterprise (~/.claude-work)</b>, Sonnet · Boost: Opus</span>
+    <span class="line"><span class="dot" id="dot"></span><span>zuletzt geholt <b id="updated" class="mono">–</b></span></span>
   </div>
+
+  <div>
+    <p class="side-label">Überblick</p>
+    <div class="tiles">
+      <div class="tile hot wide"><div class="n" id="nWaiting">0</div><div class="l">wartet auf Analyse</div></div>
+      <div class="tile"><div class="n" id="nRunning">0</div><div class="l">Analyse läuft</div></div>
+      <div class="tile"><div class="n" id="nResults">0</div><div class="l">Ergebnisse</div></div>
+      <div class="tile wide"><div class="n" id="nCost">$0.00</div><div class="l">Kosten aller Läufe</div></div>
+    </div>
+  </div>
+
+  <div class="side-block">
+    <p class="side-label" style="margin-bottom:0">Analyse</p>
+    <span>Läuft mit <b>Claude Enterprise</b> (~/.claude-work)</span>
+    <span>Standard <b>Sonnet</b> · Boost <b>Opus</b></span>
+    <button class="btn" id="refresh" type="button">Neu laden</button>
+  </div>
+</aside>
+
+<main class="content">
   <div class="error" id="error" hidden></div>
 
-  <h2>Wartende Uploads vom PAW</h2>
-  <div class="uploads" id="uploads"><div class="card empty">lade…</div></div>
+  <details class="sec" data-sec="uploads" open>
+    <summary><h2>Wartende Uploads <span class="sub">· vom PAW</span></h2>
+      <span class="sec-tools">
+        <button class="btn" id="foldAll" type="button">Alle einklappen</button>
+        <button class="btn danger" id="deleteAll" type="button" hidden>Alle löschen</button>
+      </span></summary>
+    <div class="uploads" id="uploads"><div class="card empty">lade…</div></div>
+  </details>
 
-  <h2>Ergebnisse auf dem PAW</h2>
-  <div class="card"><table>
-    <thead><tr><th>Gesendet</th><th>Batch</th><th>Zu Upload</th><th class="num">Kosten</th></tr></thead>
-    <tbody id="results"><tr><td colspan="4" class="empty">–</td></tr></tbody>
-  </table></div>
+  <details class="sec" data-sec="results" open>
+    <summary><h2>Ergebnisse <span class="sub">· auf dem PAW</span></h2></summary>
+    <div class="card wrap"><table>
+      <thead><tr><th>Gesendet</th><th>Batch</th><th>Zu Upload</th><th class="num">Kosten</th></tr></thead>
+      <tbody id="results"><tr><td colspan="4" class="empty">–</td></tr></tbody>
+    </table></div>
+  </details>
 
-  <h2>Kosten pro Analyse-Lauf <span class="h-sum" id="cost-sum"></span></h2>
-  <div class="card"><table>
-    <thead><tr><th>Zuletzt aktiv</th><th>Upload</th><th>Batch</th><th>Modell</th><th class="num">Cache Read</th><th class="num">Kosten</th></tr></thead>
-    <tbody id="costs"><tr><td colspan="6" class="empty">–</td></tr></tbody>
-  </table></div>
-  <div class="meta">Laut ccusage (Listenpreise, --offline). Ein Lauf = eine Claude-Sitzung im PAW-Ordner; Nachfragen im selben Chat zählen mit.</div>
+  <details class="sec" data-sec="costs" open>
+    <summary><h2>Kosten pro Analyse-Lauf <span class="h-sum" id="cost-sum"></span></h2></summary>
+    <div class="card wrap"><table>
+      <thead><tr><th>Zuletzt aktiv</th><th>Upload</th><th>Batch</th><th>Modell</th><th class="num">Cache Read</th><th class="num">Kosten</th></tr></thead>
+      <tbody id="costs"><tr><td colspan="6" class="empty">–</td></tr></tbody>
+    </table></div>
+    <div class="meta">Laut ccusage (Listenpreise, --offline). Ein Lauf = eine Claude-Sitzung im PAW-Ordner; Nachfragen im selben Chat zählen mit.</div>
+  </details>
 </main>
+</div>
 <div id="toast" role="status"></div>
 
 <script>
   const $ = id => document.getElementById(id);
   const notes = {};            // Upload-ID -> Text der Zusatzhinweise (bleibt beim Neuzeichnen erhalten)
   let data = null, busy = false;
+  // Eingeklappte Upload-Karten und Abschnitte merken (bleibt nach dem Neuladen)
+  const folded = new Set(JSON.parse(localStorage.getItem("pawFolded") || "[]"));
+  const saveFolded = () => localStorage.setItem("pawFolded", JSON.stringify([...folded]));
+  const closedSecs = new Set(JSON.parse(localStorage.getItem("pawClosedSecs") || "[]"));
+  document.querySelectorAll("details.sec").forEach(d => {
+    if (closedSecs.has(d.dataset.sec)) d.open = false;
+    d.addEventListener("toggle", () => {
+      d.open ? closedSecs.delete(d.dataset.sec) : closedSecs.add(d.dataset.sec);
+      localStorage.setItem("pawClosedSecs", JSON.stringify([...closedSecs]));
+    });
+  });
   // Der automatische Start laeuft im pd-filter-Dienst (auch ohne offene Seite); hier nur Countdown anzeigen
   let autoAt = {};             // Upload-ID -> Zeitpunkt (ms), zu dem der Dienst die Analyse startet
 
@@ -165,6 +258,13 @@
     const box = $("uploads");
     // Beim Tippen nicht neu zeichnen, sonst springt der Cursor
     const typing = box.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA";
+    // Gemerkte Einklapp-Zustaende von geloeschten Uploads vergessen
+    const ids = new Set(data.uploads.map(u => u.id));
+    [...folded].forEach(id => { if (!ids.has(id)) folded.delete(id); });
+    saveFolded();
+    $("deleteAll").hidden = !data.uploads.length;
+    $("foldAll").hidden = !data.uploads.length;
+    $("foldAll").textContent = data.uploads.length && data.uploads.every(u => folded.has(u.id)) ? "Alle ausklappen" : "Alle einklappen";
     if (!typing && !data.uploads.length) {
       box.innerHTML = '<div class="card empty">Keine wartenden Uploads. Neue erscheinen hier, sobald sie auf dem PAW hochgeladen sind.</div>';
     } else if (!typing) {
@@ -178,9 +278,10 @@
         if (cost !== null) badge += ` <span class="badge b-cost" title="${nruns} Lauf/Läufe">${usd(cost)}</span>`;
         const isNew = !u.error && !res.length && !started;
         const total = u.files.reduce((n, f) => n + (f.size || 0), 0);
-        return `<article class="card upload${isNew ? " new" : ""}" data-id="${esc(u.id)}">
-          <div class="u-head"><strong>${esc(u.batch || u.id)}</strong>
+        return `<article class="card upload${isNew ? " new" : ""}${folded.has(u.id) ? " folded" : ""}" data-id="${esc(u.id)}">
+          <div class="u-head"><button class="fold" data-a="fold" type="button" aria-label="Ein-/ausklappen" aria-expanded="${!folded.has(u.id)}"></button><strong>${esc(u.batch || u.id)}</strong>
             <span class="when">${esc(when(u.created) || when(idTime(u.id)))} · ${u.files.length} Datei(en), ${size(total)}</span>${badge}</div>
+          <div class="body">
           ${u.files.length ? '<div class="files">' + u.files.map(f => `<span class="file">${esc(f.name)} <span>${size(f.size || 0)}</span></span>`).join("") + "</div>" : ""}
           <div class="instr${u.instructions ? "" : " none"}">${esc(u.instructions || "Keine Instructions – Claude macht eine allgemeine Triage.")}</div>
           <div class="note-box" ${notes[u.id] ? "" : "hidden"}><textarea class="note" maxlength="1500" placeholder="Zusätzliche Hinweise für Claude (optional)">${esc(notes[u.id] || "")}</textarea></div>
@@ -191,6 +292,7 @@
             <button class="btn" data-a="stop" type="button" ${autoAt[u.id] ? "" : "hidden"}>Stopp</button>
             <button class="link-btn" data-a="note" type="button" ${notes[u.id] ? "hidden" : ""}>+ Hinweis</button>
             <button class="btn danger" data-a="done" type="button" style="margin-left:auto">Erledigt</button>
+          </div>
           </div>
         </article>`;
       }).join("");
@@ -215,6 +317,11 @@
     $("cost-sum").textContent = runs.length ? `· ${runs.length} Läufe, ${usd(sum)} gesamt, Ø ${usd(sum / runs.length)}` : "";
 
     const waiting = data.uploads.filter(u => !u.error && !resultsFor(u.id).length && !data.started[u.id]).length;
+    // Kacheln in der Seitenleiste
+    $("nWaiting").textContent = waiting;
+    $("nRunning").textContent = data.uploads.filter(u => !u.error && !resultsFor(u.id).length && data.started[u.id]).length;
+    $("nResults").textContent = data.results.length;
+    $("nCost").textContent = usd(sum);
     document.title = (waiting ? `(${waiting}) ` : "") + "PAW Exchange";
   }
 
@@ -261,6 +368,14 @@
   $("uploads").addEventListener("click", async ev => {
     const btn = ev.target.closest("[data-a]"); if (!btn || busy) return;
     const card = btn.closest("[data-id]"), id = card.dataset.id;
+    if (btn.dataset.a === "fold") {
+      const f = card.classList.toggle("folded");
+      f ? folded.add(id) : folded.delete(id);
+      btn.setAttribute("aria-expanded", String(!f));
+      saveFolded();
+      $("foldAll").textContent = data.uploads.every(u => folded.has(u.id)) ? "Alle ausklappen" : "Alle einklappen";
+      return;
+    }
     if (btn.dataset.a === "stop") { stopAuto(id); toast("Automatischer Start gestoppt"); return; }
     if (btn.dataset.a === "note") { stopAuto(id); btn.hidden = true; card.querySelector(".note-box").hidden = false; card.querySelector(".note").focus(); return; }
     if (btn.dataset.a === "done" && !btn.classList.contains("armed")) {
@@ -280,6 +395,35 @@
       toast(e.message, true);
       btn.disabled = false;
     } finally { busy = false; }
+  });
+  // Knoepfe im Abschnittskopf sollen den Abschnitt nicht auf-/zuklappen
+  $("foldAll").addEventListener("click", ev => {
+    ev.preventDefault();
+    const all = data.uploads.every(u => folded.has(u.id));
+    data.uploads.forEach(u => all ? folded.delete(u.id) : folded.add(u.id));
+    saveFolded();
+    render();
+  });
+  $("deleteAll").addEventListener("click", async ev => {
+    ev.preventDefault();
+    const btn = ev.currentTarget;
+    if (busy || !data.uploads.length) return;
+    if (!btn.classList.contains("armed")) {
+      btn.classList.add("armed"); btn.textContent = `Wirklich alle ${data.uploads.length} löschen?`;
+      setTimeout(() => { if (!busy) { btn.classList.remove("armed"); btn.textContent = "Alle löschen"; } }, 3000);
+      return;
+    }
+    busy = true; btn.disabled = true;
+    const ids = data.uploads.map(u => u.id), errors = [];
+    for (const id of ids) {
+      stopAuto(id);
+      try { await post("done", { id }); } catch (e) { errors.push(e.message); }
+    }
+    busy = false; btn.disabled = false;
+    btn.classList.remove("armed"); btn.textContent = "Alle löschen";
+    errors.length ? toast(`${ids.length - errors.length} von ${ids.length} gelöscht, Fehler: ${[...new Set(errors)].join("; ")}`, true)
+                  : toast(`${ids.length} Uploads gelöscht`);
+    load();
   });
   $("refresh").onclick = async () => { $("refresh").disabled = true; await load(true); $("refresh").disabled = false; };
 

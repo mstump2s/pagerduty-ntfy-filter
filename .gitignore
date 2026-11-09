@@ -8,3 +8,5 @@ __pycache__/
 customers.txt
 overrides.json
 las.json
+stats.json
+stats.tmp

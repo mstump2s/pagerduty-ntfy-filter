@@ -265,6 +265,11 @@ def _auto_step():
         _auto_log(f"PAW: automatisch gestartet ({uid})" if not err else f"PAW: automatischer Start fehlgeschlagen ({uid}): {err}")
 
 
+def log(text):
+    """Eigenes Log von PAW Exchange (auto.log), nicht ins Log/den Verlauf von pd-filter."""
+    _auto_log(text)
+
+
 def _auto_log(text):
     try:
         with open(WORK_DIR / "auto.log", "a", encoding="utf-8") as fh:
