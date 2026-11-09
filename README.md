@@ -22,6 +22,7 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
     die deiner Kunden, mit Spalte „Ack von“); während LAS zählen alle Kunden als deine
   - Ack und Resolve mit einem Klick
   - Zähler-Kacheln als Filter, Verlauf aller Entscheidungen
+  - Statistik-Seite (`/stats`): Acks pro Analyst, wer gerade Schicht hat, Schichtplan für zwei Wochen
   - Einstellungen (leise Mitteilungen, Service-Filter, Schedule, Zeitfenster …) live
     ändern, ohne Neustart
 - **Browser-Extension** (optional, Chrome/Edge): kompaktes Popup mit Ack/Resolve, Badge

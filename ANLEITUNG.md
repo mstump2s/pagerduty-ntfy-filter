@@ -64,6 +64,13 @@ anderer Kunden“ enthält den Rest. Deinen PagerDuty-User erkennt das Tool am p
 bei einem Account-Key dafür `PD_FROM_EMAIL` setzen, sonst werden alle
 acknowledged Incidents angezeigt.
 
+**Statistik-Seite** (`http://localhost:8790/stats`, oben im Umschalter „Statistik“): wer gerade
+Dienst hat (Tagschicht 10x5 sowie Früh/Spät/On-Duty aus den OutOfBusinessHours-Schedules, sonst wer
+als Nächstes dran ist), Acks pro Analyst (Heute/7/30 Tage/Alles, High/Medium/Customer Response) mit
+Anteil im Vergleich zur gleichmäßigen Verteilung, und der Schichtplan für diese und nächste Woche –
+inklusive Tausch, Vertretung und Übergaben an den Dummy („frei“). Der Schichtplan wird alle
+5 Minuten aus PagerDuty geladen, per Knopf auch sofort.
+
 Unter **Einstellungen** (aufklappen) lassen sich ändern: leise Mitteilungen
 (`SILENT_FOR`), Service-Filter, „nur im Schedule“, Override-User, Zeitfenster,
 Abfrage-Intervall und die Auswahl für LAS/Schicht. Das gilt sofort, ohne Neustart, und wird in

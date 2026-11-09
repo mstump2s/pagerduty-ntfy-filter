@@ -138,6 +138,7 @@ PD_API = "https://api.pagerduty.com"
 DASHBOARD_FILE = BASE_DIR / "dashboard.html"
 MINI_FILE = BASE_DIR / "mini.html"          # kompakte Ansicht fuer das Extension-Popup
 PAW_FILE = BASE_DIR / "paw.html"            # PAW Exchange: Uploads vom PAW per Klick analysieren
+STATS_PAGE_FILE = BASE_DIR / "stats.html"   # Statistik und Schichtplan
 
 # Zustand fuer die Live-Ansicht
 STATE_LOCK = threading.Lock()
@@ -887,6 +888,129 @@ def stats_view():
     return out
 
 
+# ---------- Schichtplan fuer die Statistik-Seite: wer hat wann Schicht ----------
+
+ROSTER_DAYS = 14          # diese und naechste Woche
+ROSTER_CACHE_SECONDS = 300
+ROSTER_LOCK = threading.Lock()
+_ROSTER_CACHE = {"at": 0.0, "data": None}
+NIGHT_KINDS = (("early", "Früh"), ("late", "Spät"), ("onduty", "On-Duty"))
+
+
+def fetch_schedule(schedule_id, since, until):
+    r = requests.get(f"{PD_API}/schedules/{schedule_id}", headers=PD_HEADERS, timeout=30,
+                     params={"since": since.isoformat(), "until": until.isoformat(), "time_zone": str(TZ)})
+    r.raise_for_status()
+    return r.json()["schedule"]
+
+
+def _entries(rendered):
+    return [(parse_time(e["start"]), parse_time(e["end"]), (e.get("user") or {}).get("summary") or "?")
+            for e in rendered or []]
+
+
+def _who(final, start, end):
+    """Namen in der endgueltigen Schicht (mit Overrides), die den Zeitraum ueberdecken, in Reihenfolge."""
+    names = []
+    for a, b, name in final:
+        if a < end and b > start and name not in names:
+            names.append(name)
+    return names
+
+
+def _slot(start, end, final):
+    """Eine Schicht mit den Namen und, wer genau von wann bis wann (Overrides, Vertretung)."""
+    parts = [{"name": name, "start": max(a, start).isoformat(), "end": min(b, end).isoformat()}
+             for a, b, name in final if a < end and b > start]
+    return {"start": start.isoformat(), "end": end.isoformat(), "names": _who(final, start, end), "parts": parts}
+
+
+def build_roster():
+    today = datetime.now(TZ).date()
+    monday = today - timedelta(days=today.weekday())
+    days = [monday + timedelta(days=i) for i in range(ROSTER_DAYS)]
+    since = datetime.combine(monday - timedelta(days=1), datetime.min.time(), TZ)   # Nacht von Sonntag mit
+    until = datetime.combine(monday + timedelta(days=ROSTER_DAYS), datetime.min.time(), TZ)
+    day_keys = {d.isoformat() for d in days}
+
+    schedules, offset = [], 0
+    while True:
+        r = requests.get(f"{PD_API}/schedules", headers=PD_HEADERS, timeout=20,
+                         params={"query": "CSOC", "limit": 100, "offset": offset})
+        r.raise_for_status()
+        data = r.json()
+        schedules += data.get("schedules", [])
+        if not data.get("more") or not data.get("schedules"):
+            break
+        offset += len(data["schedules"])
+    night_ids = [s for s in schedules if "outofbusinesshours" in s["name"].lower().replace(" ", "")]
+    day_ids = [s for s in schedules if "10x5" in s["name"]]
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        details = dict(zip([s["id"] for s in night_ids + day_ids],
+                           pool.map(lambda s: fetch_schedule(s["id"], since, until), night_ids + day_ids)))
+
+    # Nachtschichten: Zeilen aus den Ebenen (Frueh/Spaet/On-Duty), Namen aus der endgueltigen Schicht
+    night = []
+    for s in night_ids:
+        sch = details[s["id"]]
+        final = _entries(sch["final_schedule"]["rendered_schedule_entries"])
+        num = re.search(r"-(\d+)-\d{4}$", sch["name"]) or re.search(r"(\d+)", sch["name"])
+        for layer in sch.get("schedule_layers", []):
+            lname = layer.get("name", "").lower().replace("-", "").replace(" ", "")
+            kind = next((k for k in ("early", "late", "onduty") if k in lname), None)
+            cells = {}
+            for a, b, _ in _entries(layer.get("rendered_schedule_entries")):
+                if a.date().isoformat() in day_keys and a > since:
+                    cells.setdefault(a.date().isoformat(), []).append(_slot(a, b, final))
+            if not cells:
+                continue
+            night.append({"kind": kind or "other", "label": dict(NIGHT_KINDS).get(kind, layer.get("name", "")),
+                          "team": num.group(1) if num else "", "schedule": sch["name"], "cells": cells})
+    order = {k: i for i, (k, _) in enumerate(NIGHT_KINDS)}
+    night.sort(key=lambda r: (order.get(r["kind"], 9), r["team"]))
+    if len([r for r in night if r["kind"] == "early"]) == 1:
+        next(r for r in night if r["kind"] == "early")["team"] = ""   # nur eine Fruehschicht: ohne Nummer
+
+    # Tagschicht 10x5: eine Zeile pro Analyst, pro Tag wer wirklich da ist (Overrides, Vertretung)
+    team = []
+    for s in day_ids:
+        sch = details[s["id"]]
+        final = _entries(sch["final_schedule"]["rendered_schedule_entries"])
+        cells, counts = {}, {}
+        for layer in sch.get("schedule_layers", []):
+            for a, b, name in _entries(layer.get("rendered_schedule_entries")):
+                if name != OVERRIDE_USER:
+                    counts[name] = counts.get(name, 0) + 1
+                day = cells.setdefault(a.date().isoformat(), []) if a.date().isoformat() in day_keys else None
+                if day is not None and all(c["start"] != a.isoformat() for c in day):
+                    day.append(_slot(a, b, final))
+        cells = {d: c for d, c in cells.items() if c}
+        # Analyst = wer im Schedule eingeplant ist (Schreibweise aus PagerDuty), sonst aus dem Namen
+        owner = max(counts, key=counts.get) if counts else sch["name"].split("-", 1)[-1].strip()
+        if any(e[2] != OVERRIDE_USER for e in final) or cells:
+            team.append({"name": owner, "me": owner == MY_USER_NAME, "cells": cells})
+    team.sort(key=lambda t: t["name"].casefold())
+    return {"updated": datetime.now(TZ).isoformat(), "days": [d.isoformat() for d in days],
+            "night": night, "team": team, "absent": OVERRIDE_USER, "me": MY_USER_NAME}
+
+
+def roster_view(force=False):
+    """Schichtplan aus dem Cache (alle 5 Minuten neu), bei Fehlern der letzte Stand mit Fehlertext."""
+    with ROSTER_LOCK:
+        fresh = abs(time.time() - _ROSTER_CACHE["at"]) < ROSTER_CACHE_SECONDS
+        if _ROSTER_CACHE["data"] and fresh and not force:
+            return _ROSTER_CACHE["data"]
+        try:
+            data = build_roster()
+        except (requests.RequestException, KeyError, ValueError) as e:
+            _ROSTER_CACHE["at"] = time.time() - ROSTER_CACHE_SECONDS + 60   # in einer Minute neu versuchen
+            return dict(_ROSTER_CACHE["data"] or {}, error=f"PagerDuty-Fehler: {e}")
+        _ROSTER_CACHE.update(at=time.time(), data=data)
+        return data
+
+
 def fetch_acked(customers, all_mine=False, incidents=None):
     """Acknowledged Incidents meiner Kunden (egal von wem) plus alle, die ich acknowledged habe.
     Bei LAS/"Ohne Ende an" (all_mine) und ohne bekannte eigene User-ID: alle acknowledged Incidents.
@@ -1121,7 +1245,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, b"verboten", "text/plain; charset=utf-8")
-        pages = {"/": DASHBOARD_FILE, "/index.html": DASHBOARD_FILE, "/mini": MINI_FILE}
+        pages = {"/": DASHBOARD_FILE, "/index.html": DASHBOARD_FILE, "/mini": MINI_FILE, "/stats": STATS_PAGE_FILE}
         if paw_exchange.enabled():
             pages["/paw"] = PAW_FILE
         if self.path in pages:
@@ -1135,6 +1259,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self._json(502, {"error": err}) if err else self._json(200, {"contacts": contacts})
         if self.path in ("/api/paw", "/api/paw?refresh=1") and paw_exchange.enabled():
             return self._json(200, paw_exchange.state(force=self.path.endswith("refresh=1")))
+        if self.path in ("/api/stats", "/api/stats?refresh=1"):
+            return self._json(200, {"stats": stats_view(), "roster": roster_view(force=self.path.endswith("refresh=1")),
+                                    "paw": paw_exchange.enabled()})
         if self.path == "/api/state":
             with STATE_LOCK:
                 data = dict(STATE, events=list(EVENTS))

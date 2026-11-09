@@ -199,9 +199,10 @@
 <body>
 <div class="app">
 <aside class="side">
-  <nav class="switch" id="appSwitch" aria-label="Seite" hidden>
+  <nav class="switch" id="appSwitch" aria-label="Seite">
     <a href="/" aria-current="page">PD-Filter</a>
-    <a href="/paw" id="pawLink">PAW Exchange</a>
+    <a href="/stats">Statistik</a>
+    <a href="/paw" id="pawLink" hidden>PAW</a>
   </nav>
   <div class="brand">
     <h1>PD-Filter</h1>
@@ -443,7 +444,7 @@
         ? `<button class="chip-x" data-name="${esc(c)}" title="${esc(c)} entfernen">×</button>` : ""}</span>`).join("")
       || "<span>keine</span>";
     document.getElementById("addCustomer").hidden = !d.customers_editable;
-    document.getElementById("appSwitch").hidden = !d.paw;   // Umschalter nur, wenn PAW eingerichtet ist
+    document.getElementById("pawLink").hidden = !d.paw;   // PAW nur, wenn eingerichtet
 
     fillSettings(d.settings);
 
