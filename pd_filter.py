@@ -49,6 +49,9 @@ oder Umgebungsvariablen (die haben Vorrang):
   LAS_CONTACTS        optional, kommagetrennte IDs der PagerDuty-Kontakte (Geraete, SMS, Anruf, E-Mail),
                       die LAS / "Ohne Ende an" anschalten. Leer = alle Geraete mit PagerDuty-App (Push)
   LAS_URGENCY         optional, Standard: hoch. Fuer welche Dringlichkeit: hoch | niedrig | beide
+  STATS_TEAM          optional, Standard: CSOC Team. PagerDuty-Team fuer die Statistik (Resolves, On-Call-Stunden)
+  STATS_BUSINESS_HOURS optional, Standard: 07:30-18:00. Fenster fuer "Heute · Geschaeftszeit"
+  STATS_LAS_WINDOW    optional, Standard: 16:30-18:00. LAS-Fenster Mo-Fr, zaehlt nicht in Anteil und Stunden
 Datenschutz ist fest an (QUIET): keine Incident-Titel ins Log, keine Kundendaten an ntfy
 (Ausnahme: NTFY_DETAILS=true fuer den eigenen NTFY_SERVER, nie fuer den Ersatz-Server).
   WEB_PORT            optional, Standard: 8790 (Live-Ansicht, nur 127.0.0.1). 0 = aus
@@ -81,7 +84,6 @@ CUSTOMERS_FILE = BASE_DIR / "customers.txt"
 SEEN_FILE = BASE_DIR / "seen.json"
 OVERRIDES_FILE = BASE_DIR / "overrides.json"
 LAS_FILE = BASE_DIR / "las.json"
-STATS_FILE = BASE_DIR / "stats.json"   # live mitgezaehlte Acks pro Person
 CONFIG_FILE = BASE_DIR / "config.env"
 
 
@@ -125,6 +127,9 @@ ONLY_ON_CALL = env_bool("ONLY_ON_CALL", False)
 OVERRIDE_USER = os.environ.get("OVERRIDE_USER", "CSOC Dummy").strip()
 LAS_END_HOUR = int(os.environ.get("LAS_END_HOUR", "18"))
 LAS_CONTACTS = ",".join(s.strip() for s in os.environ.get("LAS_CONTACTS", "").split(",") if s.strip())
+STATS_TEAM = os.environ.get("STATS_TEAM", "CSOC Team").strip()                  # Team fuer die Statistik
+STATS_BUSINESS_HOURS = os.environ.get("STATS_BUSINESS_HOURS", "07:30-18:00").strip()   # "Heute · Geschaeftszeit"
+STATS_LAS_WINDOW = os.environ.get("STATS_LAS_WINDOW", "16:30-18:00").strip()   # LAS-Fenster Mo-Fr
 LAS_URGENCY = os.environ.get("LAS_URGENCY", "hoch").strip().lower()
 if LAS_URGENCY not in ("hoch", "niedrig", "beide"):
     LAS_URGENCY = "hoch"
@@ -241,6 +246,9 @@ EDITABLE = {
     "END_HOUR": int,
     "WEEKDAYS_ONLY": bool,
     "POLL_SECONDS": int,
+    "STATS_TEAM": str,
+    "STATS_BUSINESS_HOURS": str,
+    "STATS_LAS_WINDOW": str,
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -273,6 +281,12 @@ def parse_setting(key, value):
     if key == "SERVICE_FILTER":
         parts = [s.strip() for s in text.split(";") if s.strip()]
         return [s.lower() for s in parts], ";".join(parts)
+    if key in ("STATS_BUSINESS_HOURS", "STATS_LAS_WINDOW"):
+        (h0, m0), (h1, m1) = parse_window(text)
+        text = f"{h0:02d}:{m0:02d}-{h1:02d}:{m1:02d}"
+        return text, text
+    if key == "STATS_TEAM" and not text:
+        raise ValueError("darf nicht leer sein")
     if key == "LAS_CONTACTS":
         ids = [s.strip() for s in text.split(",") if s.strip()]
         if not all(ID_RE.match(i) for i in ids):
@@ -316,6 +330,8 @@ def update_settings(changes):
         if "SERVICE_FILTER" in changed:
             globals()["SERVICE_FILTER_TEXT"] = lines["SERVICE_FILTER"]
     _ON_CALL_CACHE["at"] = 0.0
+    if any(k.startswith("STATS_") or k == "OVERRIDE_USER" for k in changed):
+        _STATS["at"] = 0.0   # Statistik beim naechsten Abruf neu berechnen
     with STATE_LOCK:
         STATE.update(settings=current_settings(), service_filter=SERVICE_FILTER,
                      poll_seconds=POLL_SECONDS, override_user=OVERRIDE_USER)
@@ -818,98 +834,379 @@ def end_las_if_due():
     add_event("error" if err else "info", err or text)
 
 
-# ---------- Statistik: wer hat wie viele Incidents acknowledged ----------
+# ---------- Statistik: Resolves pro Analyst, gemessen an den On-Call-Stunden ----------
+#
+# Gezaehlt werden resolvte Incidents des Teams (STATS_TEAM), die im Zeitraum erstellt wurden.
+# Gutgeschrieben wird, wer resolvt hat. Auto-/Integration-Resolves haben keinen Resolver und
+# zaehlen nur in der Summe. OVERRIDE_USER (CSOC Dummy) faellt ganz raus, Resolves und Stunden.
+# Anteil = meine Resolves / alle Resolves von Analysten; fair = meine On-Call-Stunden / alle.
+# LAS-Fenster (Mo-Fr): Incidents daraus zaehlen nicht in "Anteil", das Fenster nicht in die Stunden,
+# weil PagerDuty nicht weiss, wer LAS hat (jeder 10x5-Schedule deckt das Fenster ab).
+# Quellen: aelter als 48 h aus der Analytics API, die letzten 48 h aus der Incident-Liste,
+# Stunden aus /oncalls. Fertige Tage liegen in stats_cache.json (statt Titel nur ein Hash).
 
-STATS_LOCK = threading.Lock()
-STATS_KEEP_IDS_DAYS = 14   # so lange merken, welche Incidents schon gezaehlt sind
-STATS_SPAM_MINUTES = 30    # gleicher Incident (gleicher Titel/Kunde) innerhalb dieser Zeit = nur einmal zaehlen
+STATS_CACHE_FILE = BASE_DIR / "stats_cache.json"
+STATS_CACHE_VERSION = 1
+STATS_LOCK = threading.Lock()          # schuetzt _STATS
+STATS_BUILD_LOCK = threading.Lock()    # nur ein Neuberechnen gleichzeitig
+STATS_CACHE_SECONDS = 300
+STATS_RECENT_HOURS = 48
+STATS_SPAM_MINUTES = 5     # gleicher Incident (gleicher Titel/Kunde) innerhalb dieser Zeit = nur einmal zaehlen
+_ANALYTICS_CACHE = {"key": None, "data": []}
+_STATS = {"at": 0.0, "data": None, "error": None, "busy": False}
+_TEAM_CACHE = {"name": None, "id": None, "eps": []}
 
 
-def load_stats():
+def parse_window(text):
+    """'07:30-18:00' -> ((7, 30), (18, 0)); ValueError bei Unsinn."""
+    m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*", text or "")
+    if not m:
+        raise ValueError("Format HH:MM-HH:MM")
+    a, b = (int(m[1]), int(m[2])), (int(m[3]), int(m[4]))
+    if not all(h <= 24 and mi < 60 and (h < 24 or mi == 0) for h, mi in (a, b)) or a >= b:
+        raise ValueError("Format HH:MM-HH:MM, Beginn vor Ende")
+    return a, b
+
+
+def _at(day, hm):
+    """Lokale Uhrzeit an einem Tag (24:00 = Mitternacht danach)."""
+    return datetime.combine(day, datetime.min.time(), TZ) + timedelta(hours=hm[0], minutes=hm[1])
+
+
+def severity(service, urgency):
+    s = (service or "").lower()
+    if "(high)" in s:
+        return "high"
+    if "(medium)" in s:
+        return "medium"
+    return "high" if urgency == "high" else "medium"
+
+
+def title_hash(title):
+    """Wiederholungen erkennen ohne Titel zu speichern: Titel ohne Zahlen (Zeitstempel, IDs)."""
+    return hashlib.sha1(re.sub(r"\d+", "#", norm(title)).encode()).hexdigest()[:12]
+
+
+def stats_team():
+    """Team-ID und Escalation Policies zu STATS_TEAM (Name), gemerkt bis sich der Name aendert."""
+    if _TEAM_CACHE["name"] == STATS_TEAM and _TEAM_CACHE["id"]:
+        return _TEAM_CACHE["id"], _TEAM_CACHE["eps"]
+    r = requests.get(f"{PD_API}/teams", headers=PD_HEADERS, timeout=20, params={"query": STATS_TEAM})
+    r.raise_for_status()
+    teams = r.json().get("teams", [])
+    team = next((t for t in teams if t["name"].casefold() == STATS_TEAM.casefold()), None)
+    if not team:
+        raise ValueError(f"Team '{STATS_TEAM}' nicht in PagerDuty gefunden")
+    r = requests.get(f"{PD_API}/escalation_policies", headers=PD_HEADERS, timeout=20,
+                     params={"team_ids[]": team["id"], "limit": 100})
+    r.raise_for_status()
+    eps = [e["id"] for e in r.json().get("escalation_policies", [])]
+    _TEAM_CACHE.update(name=STATS_TEAM, id=team["id"], eps=eps)
+    return team["id"], eps
+
+
+def _pd_stats_call(method, url, **kw):
+    """PagerDuty-Abruf fuer die Statistik; bei 429 (Rate-Limit) warten und erneut versuchen."""
+    for attempt in range(6):
+        r = requests.request(method, url, headers=PD_HEADERS, timeout=60, **kw)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r.json()
+        wait = r.headers.get("ratelimit-reset") or r.headers.get("Retry-After") or ""
+        time.sleep(min(60, float(wait) if wait.replace(".", "", 1).isdigit() else 5 * (attempt + 1)))
+    r.raise_for_status()
+
+
+def _utc(iso):
+    """Zeit aus PagerDuty als UTC; Analytics liefert mit time_zone=UTC ohne Zonenangabe."""
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def fetch_analytics(team_id, since, until):
+    """Resolvte Incidents aus der Analytics API: [id, erstellt (UTC), Service, Titel-Hash, Urgency, Resolver]."""
+    out, cursor = [], None
+    while True:
+        body = {"filters": {"created_at_start": since.isoformat(), "created_at_end": until.isoformat(),
+                            "team_ids": [team_id]},
+                "limit": 1000, "time_zone": "UTC", "order": "asc", "order_by": "created_at"}
+        if cursor:
+            body["starting_after"] = cursor
+        data = _pd_stats_call("POST", f"{PD_API}/analytics/raw/incidents", json=body)
+        for d in data.get("data", []):
+            if d.get("status") != "resolved":
+                continue
+            who = "" if d.get("auto_resolved") else (d.get("resolved_by_user_name") or "")
+            out.append([d["id"], _utc(d["created_at"]).isoformat(), d.get("service_name") or "",
+                        title_hash(d.get("description")), d.get("urgency") or "", who])
+        cursor = data.get("last")
+        if not data.get("more") or not data.get("data") or not cursor:
+            return out
+
+
+def fetch_recent_resolved(team_id, since, until):
+    """Resolvte Incidents der letzten 48 h aus der Incident-Liste, gleiches Format wie fetch_analytics."""
+    out, offset = [], 0
+    while True:
+        data = _pd_stats_call("GET", f"{PD_API}/incidents", params={
+            "statuses[]": "resolved", "team_ids[]": team_id, "since": since.isoformat(),
+            "until": until.isoformat(), "limit": 100, "offset": offset})
+        page = data.get("incidents", [])
+        for inc in page:
+            by = inc.get("last_status_change_by") or {}
+            who = by.get("summary", "") if by.get("type") == "user_reference" else ""
+            out.append([inc["id"], _utc(inc["created_at"]).isoformat(), service_name(inc),
+                        title_hash(inc.get("title")), inc.get("urgency") or "", who])
+        if not data.get("more") or not page:
+            return out
+        offset += len(page)
+
+
+def fetch_oncall_spans(eps, since, until):
+    """Wer wann on-call war (endgueltige Schedules mit Overrides): [Name, Start, Ende] in UTC.
+    /oncalls liefert dieselbe Schicht pro Escalation Level und Policy einmal -> doppelte raus.
+    Direkt eingetragene User (ohne Schedule, ohne Start/Ende) zaehlen nicht."""
+    seen, offset = set(), 0
+    while True:
+        data = _pd_stats_call("GET", f"{PD_API}/oncalls", params={
+            "escalation_policy_ids[]": eps, "since": since.isoformat(), "until": until.isoformat(),
+            "limit": 100, "offset": offset})
+        page = data.get("oncalls", [])
+        for o in page:
+            if not o.get("schedule") or not o.get("start") or not o.get("end"):
+                continue
+            a, b = max(_utc(o["start"]), since), min(_utc(o["end"]), until)
+            if a < b:
+                seen.add((o["user"].get("summary") or "?", a.isoformat(), b.isoformat()))
+        if not data.get("more") or not page:
+            return [list(s) for s in seen]
+        offset += len(page)
+
+
+def load_stats_cache(team_id):
     try:
-        data = json.loads(STATS_FILE.read_text(encoding="utf-8"))
-        return {"days": data.get("days") or {}, "counted": data.get("counted") or {},
-                "recent": data.get("recent") or {}}
-    except (FileNotFoundError, ValueError):
-        return {"days": {}, "counted": {}, "recent": {}}
+        data = json.loads(STATS_CACHE_FILE.read_text(encoding="utf-8"))
+        if data.get("version") == STATS_CACHE_VERSION and data.get("team") == team_id:
+            return data["days"]
+    except (FileNotFoundError, ValueError, KeyError):
+        pass
+    return {}
 
 
-def spam_key(inc):
-    """Wiederholungen erkennen: Titel ohne Zahlen (Zeitstempel, IDs) plus Service."""
-    title = re.sub(r"\d+", "#", norm(inc.get("title")))
-    return f"{service_name(inc)}|{title}"
+def save_stats_cache(team_id, days):
+    tmp = STATS_CACHE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"version": STATS_CACHE_VERSION, "team": team_id, "days": days},
+                              separators=(",", ":")), encoding="utf-8")
+    tmp.replace(STATS_CACHE_FILE)
 
 
-def severity(inc):
-    if (inc.get("title") or "").lower().startswith("customer response received"):
-        return "response"   # Kundenantworten extra, egal aus welchem Service
-    name = service_name(inc).lower()
-    return "high" if "high" in name else "medium" if "medium" in name else "other"
+def _day_bounds(day):
+    a = datetime.combine(day, datetime.min.time(), TZ)
+    return a.astimezone(timezone.utc), (a + timedelta(days=1)).astimezone(timezone.utc)
 
 
-def count_acks(incidents):
-    """Jeden acknowledged Incident einmal zaehlen: fuer die Person, die als erste acknowledged hat.
-    Wird derselbe Incident immer wieder neu erstellt (Spam), zaehlt die ganze Serie nur einmal."""
-    with STATS_LOCK:
-        stats = load_stats()
-        changed = False
-        window = timedelta(minutes=STATS_SPAM_MINUTES)
-        for inc in sorted(incidents, key=lambda i: i.get("created_at") or ""):
-            acks = [a for a in inc.get("acknowledgements") or [] if a.get("at")]
-            if not acks or inc["id"] in stats["counted"]:
-                continue
-            # Spam: gleicher Incident kam vor kurzem schon -> merken, aber nicht nochmal zaehlen.
-            # Das Fenster gleitet mit, solange der Incident immer wieder neu erstellt wird.
-            created = parse_time(inc.get("created_at") or min(a["at"] for a in acks))
-            key = spam_key(inc)
-            last = stats["recent"].get(key)
-            stats["recent"][key] = max(created, parse_time(last)).isoformat() if last else created.isoformat()
-            if last and abs(created - parse_time(last)) <= window:
-                stats["counted"][inc["id"]] = created.astimezone(TZ).date().isoformat()
-                changed = True
-                continue
-            first = min(acks, key=lambda a: a["at"])
-            who = (first.get("acknowledger") or {}).get("summary") or "?"
-            day = parse_time(first["at"]).astimezone(TZ).date().isoformat()
-            person = stats["days"].setdefault(day, {}).setdefault(who, {})
-            sev = severity(inc)
-            person[sev] = person.get(sev, 0) + 1
-            stats["counted"][inc["id"]] = day
-            changed = True
-        if not changed:
-            return
-        cutoff = (datetime.now(TZ).date() - timedelta(days=STATS_KEEP_IDS_DAYS)).isoformat()
-        stats["counted"] = {i: d for i, d in stats["counted"].items() if d >= cutoff}
-        recent_cutoff = datetime.now(timezone.utc) - window
-        stats["recent"] = {k: t for k, t in stats["recent"].items() if parse_time(t) >= recent_cutoff}
-        tmp = STATS_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(STATS_FILE)
+def collect_stats_data(first_day, now):
+    """Alle Incidents und On-Call-Zeiten von first_day bis jetzt; fertige Tage aus dem Cache."""
+    team_id, eps = stats_team()
+    # 48-h-Grenze auf die volle Stunde: Analytics-Teil bleibt eine Stunde gleich (Tageslimit 2000 Abrufe)
+    cut = (now - timedelta(hours=STATS_RECENT_HOURS)).replace(minute=0, second=0, microsecond=0)
+    days = load_stats_cache(team_id)
+    today = now.astimezone(TZ).date()
+    all_days = [first_day + timedelta(days=i) for i in range((today - first_day).days + 1)]
+    # Fertige Tage vorne aus dem Cache, ab dem ersten fehlenden Tag (spaetestens vorgestern) neu holen
+    cached = []
+    for d in all_days:
+        if d.isoformat() not in days:
+            break
+        cached.append(d)
+    fresh_from = all_days[len(cached)]
+    since = _day_bounds(fresh_from)[0]
+    if since >= cut:
+        older = []
+    elif _ANALYTICS_CACHE["key"] == (team_id, since, cut):
+        older = _ANALYTICS_CACHE["data"]
+    else:
+        older = fetch_analytics(team_id, since, cut)
+        _ANALYTICS_CACHE.update(key=(team_id, since, cut), data=older)
+    recent = fetch_recent_resolved(team_id, max(since, cut), now)
+    oncall = fetch_oncall_spans(eps, since, now)
+    for d in all_days[len(cached):]:
+        a, b = (x.isoformat() for x in _day_bounds(d))
+        if b <= cut.isoformat():   # Tag ganz vor der 48-h-Grenze: fertig, fuer das naechste Mal merken
+            days[d.isoformat()] = {"inc": [i for i in older if a <= i[1] < b],
+                                   "oncall": [[n, max(s, a), min(e, b)] for n, s, e in oncall if s < b and e > a]}
+    keep = (first_day - timedelta(days=7)).isoformat()
+    save_stats_cache(team_id, {k: v for k, v in days.items() if k >= keep})
+    incidents, spans = older + recent, list(oncall)
+    for d in cached:
+        incidents += days[d.isoformat()]["inc"]
+        spans += days[d.isoformat()]["oncall"]
+    seen_ids, unique = set(), []
+    for i in incidents:
+        if i[0] not in seen_ids:
+            seen_ids.add(i[0])
+            unique.append(i)
+    return unique, spans
 
 
-def stats_view():
-    """Summen pro Person fuer heute, 7 Tage, 30 Tage und alles."""
-    with STATS_LOCK:
-        days = load_stats()["days"]
-    today = datetime.now(TZ).date()
-    periods = {"today": today, "7": today - timedelta(days=6), "30": today - timedelta(days=29), "all": None}
-    out = {"since": min(days) if days else None, "periods": {}}
-    for key, start in periods.items():
-        sums = {}
-        for day, people in days.items():
-            if start and day < start.isoformat():
-                continue
-            for who, n in people.items():
-                row = sums.setdefault(who, {"name": who, "high": 0, "medium": 0, "response": 0, "other": 0})
-                for sev, c in n.items():
-                    row[sev] = row.get(sev, 0) + c
-        for r in sums.values():
-            r["total"] = r["high"] + r["medium"] + r["other"]   # Customer Responses zaehlen nicht mit
-        rows = sorted(sums.values(), key=lambda r: (-r["total"], -r["response"], r["name"]))
-        for r in rows:
-            r["me"] = bool(MY_USER_NAME) and r["name"] == MY_USER_NAME
-        out["periods"][key] = rows
+def drop_spam(incidents):
+    """Wird derselbe Incident immer wieder neu erstellt, zaehlt die Serie einmal (der erste).
+    Gleich = gleicher Service und Titel ohne Zahlen; das Fenster gleitet mit jeder Wiederholung mit."""
+    window = timedelta(minutes=STATS_SPAM_MINUTES)
+    last, kept, dropped = {}, [], 0
+    for inc in sorted(incidents, key=lambda i: i[1]):
+        key, t = (inc[2], inc[3]), _utc(inc[1])
+        prev = last.get(key)
+        last[key] = t
+        if prev and t - prev <= window:
+            dropped += 1
+        else:
+            kept.append(inc)
+    return kept, dropped
+
+
+def _merge(intervals):
+    out = []
+    for a, b in sorted(intervals):
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
     return out
+
+
+def _windows(start, end, hm_window, weekdays_only):
+    """Zeitfenster (z.B. LAS 16:30-18:00 Mo-Fr) zwischen start und end, lokal pro Tag."""
+    out, d = [], start.astimezone(TZ).date()
+    while d <= end.astimezone(TZ).date():
+        if not weekdays_only or d.weekday() < 5:
+            a, b = max(_at(d, hm_window[0]), start), min(_at(d, hm_window[1]), end)
+            if a < b:
+                out.append((a, b))
+        d += timedelta(days=1)
+    return out
+
+
+def _hours(intervals, start, end, holes):
+    """Stunden der Intervalle in [start, end) ohne die Luecken (LAS)."""
+    total = 0.0
+    for a, b in intervals:
+        a, b = max(a, start), min(b, end)
+        if a >= b:
+            continue
+        sec = (b - a).total_seconds()
+        for h0, h1 in holes:
+            x, y = max(a, h0), min(b, h1)
+            if x < y:
+                sec -= (y - x).total_seconds()
+        total += sec
+    return total / 3600
+
+
+def stats_periods(now):
+    loc = now.astimezone(TZ)
+    today = loc.date()
+    monday = today - timedelta(days=today.weekday())
+    first = today.replace(day=1)
+    prev_first = (first - timedelta(days=1)).replace(day=1)
+    day0 = lambda d: datetime.combine(d, datetime.min.time(), TZ)
+    bh = parse_window(STATS_BUSINESS_HOURS)
+    return [
+        ("today_bh", "Heute · Geschäftszeit", _at(today, bh[0]), max(_at(today, bh[0]), min(_at(today, bh[1]), loc))),
+        ("today", "Heute 24 h", day0(today), loc),
+        ("week", "Diese Woche", day0(monday), loc),
+        ("last_week", "Letzte Woche", day0(monday - timedelta(days=7)), day0(monday)),
+        ("month", "Dieser Monat", day0(first), loc),
+        ("last_month", "Letzter Monat", day0(prev_first), day0(first)),
+    ]
+
+
+def build_stats():
+    now = datetime.now(timezone.utc)
+    periods = stats_periods(now)
+    first_day = min(p[2] for p in periods).astimezone(TZ).date()
+    incidents, spans = collect_stats_data(first_day, now)
+    incidents, spam = drop_spam(incidents)
+    las = parse_window(STATS_LAS_WINDOW)
+    dummy = OVERRIDE_USER.casefold()
+    oncall = {}
+    for name, a, b in spans:
+        if name.casefold() != dummy:
+            oncall.setdefault(name, []).append((_utc(a), _utc(b)))
+    oncall = {n: [tuple(x) for x in _merge([list(i) for i in iv])] for n, iv in oncall.items()}
+
+    out = {"updated": datetime.now(TZ).isoformat(), "team": STATS_TEAM, "business_hours": STATS_BUSINESS_HOURS,
+           "las_window": STATS_LAS_WINDOW, "spam_minutes": STATS_SPAM_MINUTES, "me": MY_USER_NAME, "periods": {}}
+    for key, label, start, end in periods:
+        start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        holes = _windows(start, end, las, True)
+        rows, total, auto = {}, {"high": 0, "medium": 0}, 0
+        for inc in incidents:
+            t = _utc(inc[1])
+            if not start <= t < end:
+                continue
+            sev = severity(inc[2], inc[4])
+            who = inc[5]
+            if who and who.casefold() == dummy:
+                continue   # Dummy faellt ganz raus
+            total[sev] += 1
+            if not who:
+                auto += 1
+                continue
+            r = rows.setdefault(who, {"name": who, "high": 0, "medium": 0, "las": 0})
+            r[sev] += 1
+            if any(h0 <= t < h1 for h0, h1 in holes):
+                r["las"] += 1
+        for name, iv in oncall.items():
+            h = _hours(iv, start, end, holes)
+            if h > 0:
+                rows.setdefault(name, {"name": name, "high": 0, "medium": 0, "las": 0})["hours"] = h
+        all_own = sum(r["high"] + r["medium"] - r["las"] for r in rows.values())
+        all_hours = sum(r.get("hours", 0) for r in rows.values())
+        for r in rows.values():
+            r["total"] = r["high"] + r["medium"]
+            r["own"] = r["total"] - r["las"]
+            r["hours"] = round(r.get("hours", 0), 2)
+            r["own_share"] = r["own"] / all_own if all_own else 0
+            r["fair_share"] = r["hours"] / all_hours if all_hours else 0
+            r["ratio"] = r["own_share"] / r["fair_share"] if r["fair_share"] else None
+            r["me"] = bool(MY_USER_NAME) and r["name"] == MY_USER_NAME
+        out["periods"][key] = {
+            "label": label, "start": start.astimezone(TZ).isoformat(), "end": end.astimezone(TZ).isoformat(),
+            "total": total["high"] + total["medium"], "high": total["high"], "medium": total["medium"],
+            "no_resolver": auto, "own_total": all_own, "hours_total": round(all_hours, 2),
+            "rows": sorted(rows.values(), key=lambda r: (-r["total"], -r["hours"], r["name"]))}
+    out["spam_merged"] = spam
+    return out
+
+
+def _rebuild_stats():
+    with STATS_BUILD_LOCK:
+        try:
+            data, err = build_stats(), None
+        except (requests.RequestException, KeyError, ValueError) as e:
+            data, err = None, f"PagerDuty-Fehler: {e}"
+            log(f"Statistik nicht geladen: {e}")
+        with STATS_LOCK:
+            if data:
+                _STATS["data"] = data
+            _STATS.update(at=time.time(), error=err, busy=False)
+
+
+def stats_view(force=False, wait=False):
+    """Statistik aus dem Cache; ist sie aelter als 5 Minuten, wird sie im Hintergrund neu berechnet
+    (der erste Aufbau holt bis zu zwei Monate aus PagerDuty und dauert etwas)."""
+    with STATS_LOCK:
+        stale = force or abs(time.time() - _STATS["at"]) >= STATS_CACHE_SECONDS
+        if stale and not _STATS["busy"]:
+            _STATS["busy"] = True
+            _STATS["thread"] = threading.Thread(target=_rebuild_stats, daemon=True)
+            _STATS["thread"].start()
+        thread = _STATS.get("thread")
+    if wait and thread:
+        thread.join(timeout=90)   # "Neu laden": auf die laufende Berechnung warten
+    with STATS_LOCK:
+        return dict(_STATS["data"] or {}, error=_STATS["error"], loading=_STATS["busy"])
 
 
 # ---------- Schichtplan fuer die Statistik-Seite: wer hat wann Schicht ----------
@@ -1285,7 +1582,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path in ("/api/paw", "/api/paw?refresh=1") and paw_exchange.enabled():
             return self._json(200, paw_exchange.state(force=self.path.endswith("refresh=1")))
         if self.path in ("/api/stats", "/api/stats?refresh=1"):
-            return self._json(200, {"stats": stats_view(), "roster": roster_view(force=self.path.endswith("refresh=1")),
+            refresh = self.path.endswith("refresh=1")
+            return self._json(200, {"stats": stats_view(force=refresh, wait=refresh), "roster": roster_view(force=refresh),
                                     "paw": paw_exchange.enabled()})
         if self.path == "/shifts/data":
             try:
@@ -1584,10 +1882,6 @@ def poll_once(seen):
     with STATE_LOCK:
         all_mine = bool(STATE["las"])
     acked_raw = fetch_incidents("acknowledged")
-    try:
-        count_acks(acked_raw)
-    except Exception as e:
-        log(f"Statistik-Fehler: {e}")
     acked, acked_others = fetch_acked(customers, all_mine, acked_raw)
     with STATE_LOCK:
         STATE.update(acked=acked, acked_others=acked_others, acked_mine=bool(MY_USER_ID))
@@ -1630,11 +1924,6 @@ def main():
             # Kundenliste auch in der Pause aktuell halten, sonst bleibt die Live-Ansicht leer
             with STATE_LOCK:
                 STATE["customers"] = load_customers()
-            # Statistik auch in der Pause weiterzaehlen
-            try:
-                count_acks(fetch_incidents("acknowledged"))
-            except Exception:
-                pass   # Netzfehler in der Pause nicht ins Log, naechste Minute neuer Versuch
             time.sleep(60)
             continue
 

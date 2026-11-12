@@ -12,3 +12,5 @@ stats.json
 stats.tmp
 shifts_data.json
 shifts_data.tmp
+stats_cache.json
+stats_cache.tmp

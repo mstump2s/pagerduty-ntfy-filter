@@ -66,10 +66,15 @@ acknowledged Incidents angezeigt.
 
 **Statistik-Seite** (`http://localhost:8790/stats`, oben im Umschalter „Statistik“): wer gerade
 Dienst hat (Tagschicht 10x5 sowie Früh/Spät/On-Duty aus den OutOfBusinessHours-Schedules, sonst wer
-als Nächstes dran ist), Acks pro Analyst (Heute/7/30 Tage/Alles, High/Medium/Customer Response) mit
-Anteil im Vergleich zur gleichmäßigen Verteilung, und der Schichtplan für diese und nächste Woche –
+als Nächstes dran ist), Resolves pro Analyst (Heute · Geschäftszeit, Heute 24 h, diese/letzte Woche,
+diesen/letzten Monat) mit Anteil im Vergleich zum fairen Anteil nach On-Call-Stunden (× = Anteil ÷ Fair,
+LAS-Fenster rausgerechnet, wiederholt neu erstellte Incidents zählen einmal; Details auf der Seite unter
+„Was wird gezählt?“), und der Schichtplan für diese und nächste Woche –
 inklusive Tausch, Vertretung und Übergaben an den Dummy („frei“). Der Schichtplan wird alle
-5 Minuten aus PagerDuty geladen, per Knopf auch sofort.
+5 Minuten aus PagerDuty geladen, per Knopf auch sofort. Die Statistik ebenso; der erste Aufbau holt
+zwei Monate (Analytics API) und dauert ein, zwei Minuten, fertige Tage liegen danach in `stats_cache.json`.
+Team, Geschäftszeit und LAS-Fenster stehen in den Einstellungen (`STATS_TEAM`, `STATS_BUSINESS_HOURS`,
+`STATS_LAS_WINDOW`).
 
 Unter **Einstellungen** (aufklappen) lassen sich ändern: leise Mitteilungen
 (`SILENT_FOR`), Service-Filter, „nur im Schedule“, Override-User, Zeitfenster,
