@@ -822,14 +822,22 @@ def end_las_if_due():
 
 STATS_LOCK = threading.Lock()
 STATS_KEEP_IDS_DAYS = 14   # so lange merken, welche Incidents schon gezaehlt sind
+STATS_SPAM_MINUTES = 30    # gleicher Incident (gleicher Titel/Kunde) innerhalb dieser Zeit = nur einmal zaehlen
 
 
 def load_stats():
     try:
         data = json.loads(STATS_FILE.read_text(encoding="utf-8"))
-        return {"days": data.get("days") or {}, "counted": data.get("counted") or {}}
+        return {"days": data.get("days") or {}, "counted": data.get("counted") or {},
+                "recent": data.get("recent") or {}}
     except (FileNotFoundError, ValueError):
-        return {"days": {}, "counted": {}}
+        return {"days": {}, "counted": {}, "recent": {}}
+
+
+def spam_key(inc):
+    """Wiederholungen erkennen: Titel ohne Zahlen (Zeitstempel, IDs) plus Service."""
+    title = re.sub(r"\d+", "#", norm(inc.get("title")))
+    return f"{service_name(inc)}|{title}"
 
 
 def severity(inc):
@@ -840,13 +848,25 @@ def severity(inc):
 
 
 def count_acks(incidents):
-    """Jeden acknowledged Incident einmal zaehlen: fuer die Person, die als erste acknowledged hat."""
+    """Jeden acknowledged Incident einmal zaehlen: fuer die Person, die als erste acknowledged hat.
+    Wird derselbe Incident immer wieder neu erstellt (Spam), zaehlt die ganze Serie nur einmal."""
     with STATS_LOCK:
         stats = load_stats()
         changed = False
-        for inc in incidents:
+        window = timedelta(minutes=STATS_SPAM_MINUTES)
+        for inc in sorted(incidents, key=lambda i: i.get("created_at") or ""):
             acks = [a for a in inc.get("acknowledgements") or [] if a.get("at")]
             if not acks or inc["id"] in stats["counted"]:
+                continue
+            # Spam: gleicher Incident kam vor kurzem schon -> merken, aber nicht nochmal zaehlen.
+            # Das Fenster gleitet mit, solange der Incident immer wieder neu erstellt wird.
+            created = parse_time(inc.get("created_at") or min(a["at"] for a in acks))
+            key = spam_key(inc)
+            last = stats["recent"].get(key)
+            stats["recent"][key] = max(created, parse_time(last)).isoformat() if last else created.isoformat()
+            if last and abs(created - parse_time(last)) <= window:
+                stats["counted"][inc["id"]] = created.astimezone(TZ).date().isoformat()
+                changed = True
                 continue
             first = min(acks, key=lambda a: a["at"])
             who = (first.get("acknowledger") or {}).get("summary") or "?"
@@ -860,6 +880,8 @@ def count_acks(incidents):
             return
         cutoff = (datetime.now(TZ).date() - timedelta(days=STATS_KEEP_IDS_DAYS)).isoformat()
         stats["counted"] = {i: d for i, d in stats["counted"].items() if d >= cutoff}
+        recent_cutoff = datetime.now(timezone.utc) - window
+        stats["recent"] = {k: t for k, t in stats["recent"].items() if parse_time(t) >= recent_cutoff}
         tmp = STATS_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
         tmp.replace(STATS_FILE)
