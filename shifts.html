@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shift-Uebersicht</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 1.2rem;
+         background: #f6f7f9; color: #1a1d21; }
+  @media (prefers-color-scheme: dark) { body { background: #111418; color: #e6e9ee; } }
+  h1 { font-size: 1.25rem; margin: 0 0 .3rem; }
+  .meta { color: #8b949e; font-size: .85rem; margin-bottom: 1rem; }
+  .err { color: #d93025; }
+  details { background: rgba(127,127,127,.08); border-radius: 8px; padding: .6rem .9rem; margin: .6rem 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  pre { overflow: auto; font-size: .78rem; line-height: 1.35; margin: .6rem 0 0;
+        white-space: pre-wrap; word-break: break-word; }
+  a { color: #4c8dff; }
+</style>
+</head>
+<body>
+<h1>Shift-Uebersicht <span style="font-weight:400;font-size:.8rem;color:#8b949e">(Phase 1: Rohdaten)</span></h1>
+<div class="meta" id="meta">Lade&nbsp;&hellip;</div>
+<div id="content"></div>
+<p class="meta">Daten kommen von der Browser-Extension, solange ein shifts-Tab offen ist.
+   Aktualisiert sich alle 30&nbsp;s. &middot; <a href="/">zurueck zum Dashboard</a></p>
+<script>
+async function load() {
+  let d;
+  try { d = await (await fetch("/shifts/data", { cache: "no-store" })).json(); }
+  catch (e) { document.getElementById("meta").innerHTML = '<span class="err">Server nicht erreichbar</span>'; return; }
+  const meta = document.getElementById("meta");
+  const content = document.getElementById("content");
+  if (d.empty) {
+    meta.innerHTML = 'Noch keine Daten. Oeffne <a href="https://shifts.csoc.gk.rocks/" target="_blank">shifts</a> ' +
+                     '(eingeloggt), dann erscheint hier der aktuelle Stand.';
+    content.innerHTML = ""; return;
+  }
+  const when = d.fetched_at ? new Date(d.fetched_at).toLocaleString("de-DE") : "?";
+  meta.textContent = "Stand: " + when;
+  let html = "";
+  if (d.errors && Object.keys(d.errors).length)
+    html += '<div class="err">Fehler: ' + JSON.stringify(d.errors) + '</div>';
+  for (const key of ["overview", "users", "deputies"]) {
+    if (!(key in d)) continue;
+    const n = Array.isArray(d[key]) ? d[key].length : (d[key] && typeof d[key] === "object" ? Object.keys(d[key]).length : "");
+    html += '<details' + (key === "overview" ? " open" : "") + '><summary>' + key +
+            (n !== "" ? " (" + n + ")" : "") + '</summary><pre>' +
+            JSON.stringify(d[key], null, 2).replace(/</g, "&lt;") + '</pre></details>';
+  }
+  content.innerHTML = html;
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

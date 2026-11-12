@@ -2,6 +2,21 @@
 // Alarm (Kunde + passender Service) offen und nicht acknowledged ist.
 // Port anpassen, wenn WEB_PORT in config.env geaendert wurde (auch in manifest.json und popup.html).
 const STATE_URL = "http://localhost:8790/api/state";
+const SHIFTS_INGEST_URL = "http://localhost:8790/shifts/ingest";
+
+// Vom Content-Script auf shifts.csoc.gk.rocks: API-Rohdaten an pd-filter weiterreichen.
+// Der Background-Worker darf cross-origin auf localhost posten (host_permissions).
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || msg.type !== "shiftsData") return;
+  fetch(SHIFTS_INGEST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-PD-Shifts": "1" },
+    body: JSON.stringify(msg.payload),
+  })
+    .then((r) => sendResponse({ ok: r.ok, status: r.status }))
+    .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+  return true; // asynchrone Antwort
+});
 const COLORS = { ok: "#1e8e3e", alarm: "#d93025", idle: "#8b949e" };
 
 let blinkTimer = null;

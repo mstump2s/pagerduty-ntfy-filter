@@ -67,7 +67,7 @@ import threading
 import time
 import unicodedata
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -139,6 +139,8 @@ DASHBOARD_FILE = BASE_DIR / "dashboard.html"
 MINI_FILE = BASE_DIR / "mini.html"          # kompakte Ansicht fuer das Extension-Popup
 PAW_FILE = BASE_DIR / "paw.html"            # PAW Exchange: Uploads vom PAW per Klick analysieren
 STATS_PAGE_FILE = BASE_DIR / "stats.html"   # Statistik und Schichtplan
+SHIFTS_PAGE_FILE = BASE_DIR / "shifts.html" # Uebersicht: wer uebernimmt welche Kunden (aus shifts.csoc.gk.rocks)
+SHIFTS_FILE = BASE_DIR / "shifts_data.json" # von der Extension gespiegelte shifts-Rohdaten
 
 # Zustand fuer die Live-Ansicht
 STATE_LOCK = threading.Lock()
@@ -1245,7 +1247,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, b"verboten", "text/plain; charset=utf-8")
-        pages = {"/": DASHBOARD_FILE, "/index.html": DASHBOARD_FILE, "/mini": MINI_FILE, "/stats": STATS_PAGE_FILE}
+        pages = {"/": DASHBOARD_FILE, "/index.html": DASHBOARD_FILE, "/mini": MINI_FILE,
+                 "/stats": STATS_PAGE_FILE, "/shifts": SHIFTS_PAGE_FILE}
         if paw_exchange.enabled():
             pages["/paw"] = PAW_FILE
         if self.path in pages:
@@ -1262,6 +1265,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path in ("/api/stats", "/api/stats?refresh=1"):
             return self._json(200, {"stats": stats_view(), "roster": roster_view(force=self.path.endswith("refresh=1")),
                                     "paw": paw_exchange.enabled()})
+        if self.path == "/shifts/data":
+            try:
+                raw = SHIFTS_FILE.read_text("utf-8")
+            except FileNotFoundError:
+                return self._json(200, {"empty": True})
+            return self._send(200, raw.encode("utf-8"), "application/json")
         if self.path == "/api/state":
             with STATE_LOCK:
                 data = dict(STATE, events=list(EVENTS))
@@ -1272,6 +1281,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send(404, b"nicht gefunden", "text/plain; charset=utf-8")
 
     def do_POST(self):
+        # Shifts-Spiegelung von der Browser-Extension: eigener localhost-Endpunkt.
+        # Origin ist hier chrome-extension://... -> eigener Header statt _origin_ok().
+        if self.path == "/shifts/ingest":
+            if not (self._host_ok() and self.headers.get("X-PD-Shifts") == "1"):
+                return self._json(403, {"error": "verboten"})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                data = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as e:
+                return self._json(400, {"error": f"ungueltige Daten: {e}"})
+            if not isinstance(data, dict):
+                return self._json(400, {"error": "Objekt erwartet"})
+            data["received_at"] = datetime.now(timezone.utc).isoformat()
+            tmp = SHIFTS_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
+            tmp.replace(SHIFTS_FILE)
+            return self._json(200, {"ok": True})
         # Nur vom eigenen Dashboard: richtiger Host, passender Origin, eigener Header
         if not (self._host_ok() and self._origin_ok() and self.headers.get("X-PD-Filter") == "1"):
             return self._json(403, {"error": "verboten"})
