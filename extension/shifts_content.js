@@ -3,6 +3,8 @@
 // Rohdaten an den lokalen pd-filter-Server (ueber den Background-Service-Worker).
 // Kein Token verlaesst den Rechner: nur die API-Antworten gehen an localhost:8790.
 
+console.log("[pd-filter] shifts-Content-Script geladen auf", location.href);
+
 const API_AUDIENCE = "5208db88-3870-46e0-be18-b6947918d4c1"; // shifts-Backend-App
 const SCOPE_HINT = "access_as_user";
 const POLL_MS = 3 * 60 * 1000; // alle 3 Minuten, solange der Tab offen ist
