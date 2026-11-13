@@ -7,8 +7,8 @@
 <!--
   Reine Info-Seite fuer den PAW: zeigt offene PagerDuty-Incidents und den Sentinel-Link daraus.
   Eigenstaendig, kein pd-filter-Dienst noetig: einfach die Datei im Browser oeffnen.
-  Nur lesend (GET): kein Ack/Resolve, keine Mitteilungen, kein Ton.
-  API-Key und Kundenliste bleiben im localStorage dieses Browsers.
+  Ack/Resolve direkt gegen die PagerDuty-API; keine Mitteilungen, kein Ton.
+  API-Key, From-Adresse und Kundenliste bleiben im localStorage dieses Browsers.
 -->
 <style>
   :root {
@@ -98,6 +98,13 @@
   .copy { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 4px; }
   .copy:hover { color: var(--accent); }
 
+  .btn.danger:hover, .btn.armed { border-color: var(--err); color: var(--err); }
+  td.act.do .btn { padding: 4px 10px; }
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: calc(100% - 32px);
+           padding: 10px 16px; border-radius: 8px; color: #fff; background: #0b6e69; font-weight: 600;
+           box-shadow: 0 4px 16px rgba(0,0,0,.2); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  #toast.show { opacity: 1; }
+  #toast.err { background: #b3261e; }
   dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text);
            padding: 20px 22px; width: min(520px, calc(100% - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.4); }
@@ -131,8 +138,9 @@
 
   <div class="side-block">
     <p class="side-label" style="margin-bottom:0">Ansicht</p>
-    <span>Nur Info: <b>kein Ack/Resolve, keine Mitteilungen</b></span>
-    <label><input type="checkbox" id="auto" checked> alle 60 s neu laden</label>
+    <span>Ack/Resolve direkt in PagerDuty · <b>keine Mitteilungen</b></span>
+    <span id="meLine" hidden>als <b id="me"></b></span>
+    <label><input type="checkbox" id="auto" checked> alle 5 s neu laden</label>
     <button class="btn" id="refresh" type="button">Neu laden</button>
     <button class="btn" id="openSettings" type="button">Einstellungen</button>
   </div>
@@ -147,8 +155,8 @@
       <input class="search" id="search" type="search" placeholder="Suchen (Titel, Service, Kunde, #Nummer)">
     </div>
     <div class="card wrap"><table>
-      <thead><tr><th>Erstellt</th><th>Status</th><th>Incident</th><th>Zugewiesen</th><th style="text-align:right">Sentinel</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="5" class="empty">lade…</td></tr></tbody>
+      <thead><tr><th>Erstellt</th><th>Status</th><th>Incident</th><th>Zugewiesen</th><th style="text-align:right">Aktion</th><th style="text-align:right">Sentinel</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty">lade…</td></tr></tbody>
     </table></div>
     <div class="meta">Der Sentinel-Link wird aus den Alerts des Incidents gelesen (Links, Details, CEF-Details, Beschreibung).
       Gibt es mehrere, steht der erste als Knopf da, die übrigen dahinter.</div>
@@ -156,13 +164,17 @@
 </main>
 </div>
 
+<div id="toast" role="status"></div>
 <dialog id="settings">
   <form method="dialog" id="settingsForm">
     <h3>Einstellungen</h3>
     <label for="sToken">PagerDuty API-Key</label>
     <input id="sToken" type="password" autocomplete="off" spellcheck="false" placeholder="u+xxxxxxxx…">
-    <div class="hint">Am besten ein <b>Read-only</b>-Key (User Settings → API Access). Die Seite fragt nur lesend ab.
-      Der Key bleibt im localStorage dieses Browsers.</div>
+    <div class="hint">Für Ack/Resolve braucht es einen Key mit Schreibrecht, am besten deinen persönlichen
+      User-Key (User Settings → API Access). Der Key bleibt im localStorage dieses Browsers.</div>
+    <label for="sFrom">From-Adresse (optional)</label>
+    <input id="sFrom" type="email" spellcheck="false" placeholder="name@firma.de">
+    <div class="hint">Deine PagerDuty-Login-Adresse. Nur nötig bei einem Account-Key; beim User-Key wird sie selbst ermittelt.</div>
     <label for="sServices">Service-IDs (optional)</label>
     <input id="sServices" type="text" spellcheck="false" placeholder="PXXXXXX, PYYYYYY">
     <div class="hint">Leer = alle Services, die der Key sehen darf.</div>
@@ -182,9 +194,18 @@
   const store = {
     get token() { return localStorage.getItem("pdInfoToken") || ""; },
     get services() { return (localStorage.getItem("pdInfoServices") || "").split(/[\s,;]+/).filter(Boolean); },
+    get from() { return (localStorage.getItem("pdInfoFrom") || "").trim(); },
     get customers() { return (localStorage.getItem("pdInfoCustomers") || "").split("\n").map(s => s.trim()).filter(Boolean); },
   };
+  let toastTimer;
+  function toast(text, err) {
+    const t = $("toast"); t.textContent = text; t.className = "show" + (err ? " err" : "");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = "", 3500);
+  }
   let incidents = [], filter = localStorage.getItem("pdInfoFilter") || "all", loading = false;
+  let me = null;                // { email, name } des Key-Inhabers (nur bei User-Key ermittelbar)
+  const pending = new Set();   // Incident-IDs, deren Ack/Resolve gerade laeuft
+  const armed = new Map();     // Incident-ID -> Zeitpunkt (ms), bis zu dem "Wirklich resolven?" gilt
   const links = new Map();     // Incident-ID -> Liste der Sentinel-Links (aendert sich nicht, daher gemerkt)
 
   function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -198,12 +219,13 @@
   function norm(s) { return (s || "").normalize("NFKC").replace(/[﻿​‌‍⁠­]/g, "").split(/\s+/).filter(Boolean).join(" ").toLowerCase(); }
   function customerOf(title) { const t = norm(title); return store.customers.find(c => norm(c) && t.includes(norm(c))) || null; }
 
-  async function pd(path, params = {}) {
+  async function pd(path, params = {}, method = "GET", body = null) {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) (Array.isArray(v) ? v : [v]).forEach(x => q.append(k, x));
-    const r = await fetch(`${PD_API}${path}?${q}`, {
-      headers: { "Authorization": "Token token=" + store.token },
-      cache: "no-store",
+    const headers = { "Authorization": "Token token=" + store.token };
+    if (body) { headers["Content-Type"] = "application/json"; headers["From"] = fromAddr(); }
+    const r = await fetch(`${PD_API}${path}${Object.keys(params).length ? "?" + q : ""}`, {
+      method, headers, cache: "no-store", body: body ? JSON.stringify(body) : undefined,
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
@@ -211,6 +233,22 @@
       throw new Error(r.status === 401 ? "API-Key ungültig (401)" : `HTTP ${r.status} ${msg}`.trim());
     }
     return r.json();
+  }
+
+  function fromAddr() { return store.from || (me && me.email) || ""; }
+  async function findMe() {
+    if (me !== null) return;
+    try {
+      const u = (await pd("/users/me")).user;
+      me = { email: u.email, name: u.name };
+    } catch { me = { email: "", name: "" }; }   // Account-Key: kein /users/me, dann From-Adresse aus den Einstellungen
+    $("meLine").hidden = !(me.name || store.from);
+    $("me").textContent = me.name || store.from;
+  }
+
+  async function setStatus(id, status) {
+    if (!fromAddr()) throw new Error("From-Adresse fehlt (Einstellungen)");
+    await pd(`/incidents/${id}`, {}, "PUT", { incident: { type: "incident_reference", status } });
   }
 
   async function fetchOpen() {
@@ -293,8 +331,14 @@
     return `<a class="btn primary" href="${esc(l[0])}" target="_blank" rel="noopener noreferrer" title="${esc(l[0])}">Sentinel öffnen</a>`
          + `<button class="copy" type="button" data-copy="${esc(l[0])}" title="Link kopieren">⧉</button>${extra}`;
   }
+  function actionCell(i) {
+    if (pending.has(i.id)) return '<span class="none">…</span>';
+    const ack = i.status === "triggered" ? '<button class="btn" type="button" data-a="ack">Ack</button> ' : "";
+    const sure = (armed.get(i.id) || 0) > Date.now();
+    return ack + `<button class="btn danger${sure ? " armed" : ""}" type="button" data-a="resolve">${sure ? "Wirklich?" : "Resolve"}</button>`;
+  }
   function renderLinks(id) {
-    const cell = document.querySelector(`tr[data-id="${CSS.escape(id)}"] td.act`);
+    const cell = document.querySelector(`tr[data-id="${CSS.escape(id)}"] td.act:not(.do)`);
     if (cell) cell.innerHTML = linkCell(id);
   }
 
@@ -316,8 +360,7 @@
     $("nAck").textContent = incidents.filter(i => i.status === "acknowledged").length;
     $("nMine").textContent = store.customers.length ? mine.length : "–";
     document.querySelectorAll(".tile").forEach(t => t.classList.toggle("active", t.dataset.f === filter));
-    $("listTitle").innerHTML = { all: "Offene Incidents", triggered: "Triggered", acknowledged: "Acknowledged", mine: "Meine Kunden" }[filter]
-      + ' <span class="sub">· nur Info</span>';
+    $("listTitle").textContent = { all: "Offene Incidents", triggered: "Triggered", acknowledged: "Acknowledged", mine: "Meine Kunden" }[filter];
 
     const list = visible();
     $("rows").innerHTML = list.length ? list.map(i => {
@@ -331,29 +374,35 @@
         <td class="title"><a href="${esc(i.html_url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>
           <div class="sub">#${esc(i.incident_number)} · ${esc(i.service?.summary || "")}${cust ? ` · <span class="badge b-cust">${esc(cust)}</span>` : ""}</div></td>
         <td>${esc(who)}</td>
+        <td class="act do">${actionCell(i)}</td>
         <td class="act">${linkCell(i.id)}</td></tr>`;
-    }).join("") : `<tr><td colspan="5" class="empty">${incidents.length ? "Nichts für diesen Filter." : "Keine offenen Incidents."}</td></tr>`;
+    }).join("") : `<tr><td colspan="6" class="empty">${incidents.length ? "Nichts für diesen Filter." : "Keine offenen Incidents."}</td></tr>`;
     loadAllLinks(list);
   }
 
   async function load() {
     if (loading) return;
     if (!store.token) {
-      $("rows").innerHTML = '<tr><td colspan="5" class="empty">Noch kein API-Key – unter <b>Einstellungen</b> eintragen.</td></tr>';
+      $("rows").innerHTML = '<tr><td colspan="6" class="empty">Noch kein API-Key – unter <b>Einstellungen</b> eintragen.</td></tr>';
       $("dot").className = "dot";
       return;
     }
     loading = true; $("refresh").disabled = true;
     try {
-      incidents = await fetchOpen();
+      await findMe();
+      const fresh = await fetchOpen();
+      // Alle 5 s neu holen, aber nur neu zeichnen, wenn sich etwas geaendert hat (sonst geht ein Klick evtl. verloren)
+      const sig = list => JSON.stringify(list.map(i => [i.id, i.status, i.urgency, i.title, (i.assignments || []).map(a => a.assignee?.id)]));
+      const changed = sig(fresh) !== sig(incidents) || !$("rows").querySelector("tr[data-id]") && fresh.length;
+      incidents = fresh;
       const ids = new Set(incidents.map(i => i.id));
       [...links.keys()].forEach(k => { if (!ids.has(k)) links.delete(k); });
       // Fehlgeschlagene Link-Abfragen beim naechsten Laden nochmal versuchen
       [...links.entries()].forEach(([k, v]) => { if (v && v.error) links.delete(k); });
       $("error").hidden = true;
       $("dot").className = "dot on";
-      $("updated").textContent = when(new Date());
-      render();
+      $("updated").textContent = new Date().toLocaleTimeString("de-DE");
+      if (changed) render();
     } catch (e) {
       $("dot").className = "dot err";
       $("error").hidden = false;
@@ -368,6 +417,27 @@
   $("search").addEventListener("input", render);
   $("refresh").onclick = load;
   $("rows").addEventListener("click", async ev => {
+    const act = ev.target.closest("[data-a]");
+    if (act) {
+      const id = act.closest("tr").dataset.id, inc = incidents.find(i => i.id === id);
+      if (!inc || pending.has(id)) return;
+      const status = act.dataset.a === "ack" ? "acknowledged" : "resolved";
+      // Resolve braucht einen zweiten Klick innerhalb von 3 s
+      if (status === "resolved" && !((armed.get(id) || 0) > Date.now())) {
+        armed.set(id, Date.now() + 3000); render();
+        setTimeout(() => { if (armed.has(id) && armed.get(id) <= Date.now()) { armed.delete(id); render(); } }, 3100);
+        return;
+      }
+      armed.delete(id); pending.add(id); render();
+      try {
+        await setStatus(id, status);
+        if (status === "resolved") incidents = incidents.filter(i => i.id !== id); else inc.status = status;
+        toast(status === "resolved" ? `#${inc.incident_number} resolved` : `#${inc.incident_number} acknowledged`);
+      } catch (e) { toast(e.message, true); }
+      pending.delete(id); render();
+      load();
+      return;
+    }
     const b = ev.target.closest("[data-copy]"); if (!b) return;
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "✓"; }
     catch { b.textContent = "✗"; }
@@ -379,6 +449,7 @@
   $("openSettings").onclick = () => {
     $("sToken").value = store.token;
     $("sServices").value = store.services.join(", ");
+    $("sFrom").value = store.from;
     $("sCustomers").value = store.customers.join("\n");
     $("settings").showModal();
   };
@@ -386,6 +457,8 @@
     if ($("settings").returnValue !== "save") return;
     localStorage.setItem("pdInfoToken", $("sToken").value.trim());
     localStorage.setItem("pdInfoServices", $("sServices").value.trim());
+    localStorage.setItem("pdInfoFrom", $("sFrom").value.trim());
+    me = null;
     localStorage.setItem("pdInfoCustomers", $("sCustomers").value);
     links.clear();
     load();
@@ -393,7 +466,7 @@
 
   if (!store.token) $("openSettings").click();
   load();
-  setInterval(() => { if (!document.hidden && $("auto").checked) load(); }, 60000);
+  setInterval(() => { if (!document.hidden && $("auto").checked) load(); }, 5000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && $("auto").checked) load(); });
 </script>
 </body>

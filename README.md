@@ -26,8 +26,8 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   - Einstellungen (leise Mitteilungen, Service-Filter, Schedule, Zeitfenster …) live
     ändern, ohne Neustart
 - **PD-Info für den PAW** (`paw-info.html`): eigenständige HTML-Seite ohne Dienst, einfach im
-  Browser öffnen. Zeigt offene Incidents nur zur Info (kein Ack/Resolve, keine Mitteilungen) und
-  liest den Sentinel-Link aus den Alerts, mit einem Klick zu öffnen. API-Key (am besten read-only)
+  Browser öffnen. Zeigt offene Incidents (alle 5 s neu, keine Mitteilungen) mit Ack/Resolve und
+  liest den Sentinel-Link aus den Alerts, mit einem Klick zu öffnen. API-Key (persönlicher User-Key)
   und Kundenliste bleiben im localStorage des Browsers.
 - **Browser-Extension** (optional, Chrome/Edge): kompaktes Popup mit Ack/Resolve, Badge
   mit der Zahl offener Incidents deiner Kunden, Icon blinkt bei lauten Alarmen
