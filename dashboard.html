@@ -38,9 +38,9 @@
 
   /* Rahmen: Seitenleiste links, Inhalt rechts; auf schmalen Bildschirmen untereinander */
   .app { display: flex; flex-wrap: wrap; min-height: 100vh; }
-  .side { flex: 1 1 240px; max-width: 290px; background: var(--side); color: var(--side-text);
+  .side { flex: 0 0 290px; min-width: 0; background: var(--side); color: var(--side-text);
           padding: 22px 16px; display: flex; flex-direction: column; gap: 24px; }
-  @media (max-width: 820px) { .side { max-width: none; } }
+  @media (max-width: 820px) { .side { flex-basis: 100%; } }
   .content { flex: 999 1 560px; min-width: 0; padding: 24px 28px 110px; display: flex; flex-direction: column; gap: 22px; }
 
   .brand { display: flex; flex-direction: column; gap: 4px; }
@@ -87,10 +87,11 @@
   .side-block { display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: var(--side-muted); }
   .side-block b { color: var(--side-text); font-weight: 600; }
   .side-block .item { display: flex; flex-direction: column; gap: 6px; }
-  .side .ack { background: var(--side-tile); color: var(--side-text); border-color: transparent; align-self: flex-start; }
+  .side .ack { background: var(--side-tile); color: var(--side-text); border-color: transparent; align-self: flex-start;
+               white-space: normal; text-align: left; }
   .side .ack:hover { border-color: var(--side-accent); color: var(--side-accent); }
   .switch { display: flex; background: var(--side-tile); border-radius: 9px; padding: 3px; gap: 3px; }
-  .switch a { flex: 1; text-align: center; padding: 7px 8px; border-radius: 7px; font-size: 13px; font-weight: 500;
+  .switch a { flex: 1; text-align: center; padding: 7px 6px; white-space: nowrap; border-radius: 7px; font-size: 13px; font-weight: 500;
               color: var(--side-muted); text-decoration: none; }
   .switch a:hover { color: var(--side-text); text-decoration: none; background: color-mix(in srgb, var(--side-hi) 60%, transparent); }
   .switch a[aria-current="page"] { background: var(--side-hi); color: var(--side-text); font-weight: 600; }
@@ -164,22 +165,6 @@
   .bar-sum { border-top: 1px solid var(--line-soft); padding-top: 10px; }
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
-
-  /* Einstellungen */
-  .settings { padding: 10px 14px; }
-  .settings summary { cursor: pointer; font-weight: 600; }
-  .settings form { display: grid; gap: 12px; margin-top: 12px; max-width: 520px; }
-  .settings label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
-  .settings label.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
-  .settings .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
-  .settings input:not([type=checkbox]), .settings select {
-    font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
-    background: var(--panel); color: var(--text); }
-  .settings input[type=number] { width: 90px; }
-  .settings fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 0; display: grid; gap: 6px; }
-  .settings h3 { font-size: 13px; margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
-  .settings h3:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
-  .settings legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 
   #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: calc(100% - 32px);
            padding: 10px 16px; border-radius: 8px; color: #fff; background: #0b6e69; font-weight: 600;
@@ -271,64 +256,6 @@
       </form>
     </div>
   </div>
-
-  <details class="card settings" id="settingsBox">
-    <summary>Einstellungen</summary>
-    <form id="settings">
-      <h3>Filter &amp; ntfy</h3>
-      <label>Ton nur bei Service (mehrere mit ;, leer = alle)
-        <input name="SERVICE_FILTER" placeholder="z. B. CSOC (High)">
-      </label>
-      <label>Mitteilung ohne Ton bei
-        <select name="SILENT_FOR">
-          <option value="kunden">meinen Kunden, wenn der Service nicht passt</option>
-          <option value="alle">allen Incidents ohne Ton</option>
-          <option value="keine">nie (nur Mitteilungen mit Ton)</option>
-        </select>
-      </label>
-      <label class="check"><input type="checkbox" name="ONLY_IN_WINDOW"> Filter nur zu bestimmten Zeiten</label>
-      <div class="row">
-        <label>von (Uhr) <input type="number" name="START_HOUR" min="0" max="24"></label>
-        <label>bis (Uhr) <input type="number" name="END_HOUR" min="0" max="24"></label>
-        <label class="check"><input type="checkbox" name="WEEKDAYS_ONLY"> nur Mo–Fr</label>
-      </div>
-      <label>PagerDuty abfragen alle (Sekunden) <input type="number" name="POLL_SECONDS" min="5" max="3600"></label>
-
-      <h3>On-Call</h3>
-      <label class="check"><input type="checkbox" name="ONLY_ON_CALL"> Filter nur, wenn ich On-Call bin</label>
-      <label>On-Call übergeben an (PagerDuty-Name oder E-Mail)
-        <input name="OVERRIDE_USER">
-      </label>
-
-      <h3>PagerDuty-Benachrichtigung (LAS)</h3>
-      <label>LAS bis (Uhr)
-        <input type="number" name="LAS_END_HOUR" min="0" max="24">
-      </label>
-      <label>Für Incidents mit Dringlichkeit
-        <select name="LAS_URGENCY">
-          <option value="hoch">hoch</option>
-          <option value="niedrig">niedrig</option>
-          <option value="beide">hoch und niedrig</option>
-        </select>
-      </label>
-      <fieldset class="contacts">
-        <legend>Benachrichtigen über (nichts gewählt = alle Geräte mit PagerDuty-App)</legend>
-        <input type="hidden" name="LAS_CONTACTS">
-        <div id="contactList" class="svc">lädt…</div>
-      </fieldset>
-      <h3>Statistik</h3>
-      <label>Team in PagerDuty <input name="STATS_TEAM" placeholder="CSOC Team"></label>
-      <div class="row">
-        <label>Geschäftszeit <input name="STATS_BUSINESS_HOURS" placeholder="07:30-18:00" pattern="\d{1,2}:\d{2}-\d{1,2}:\d{2}"></label>
-        <label>LAS-Fenster Mo–Fr <input name="STATS_LAS_WINDOW" placeholder="16:30-18:00" pattern="\d{1,2}:\d{2}-\d{1,2}:\d{2}"></label>
-      </div>
-      <span class="svc">Datenschutz ist immer an: keine Incident-Titel ins Log, keine Kundendaten an ntfy.</span>
-      <div class="row">
-        <button class="ack" type="submit">Speichern</button>
-        <span class="svc">Gilt sofort, wird in config.env gespeichert.</span>
-      </div>
-    </form>
-  </details>
 
   <div class="cols">
     <section class="view" data-view="mine">
@@ -446,8 +373,6 @@
       || "<span>keine</span>";
     document.getElementById("addCustomer").hidden = !d.customers_editable;
     document.getElementById("pawLink").hidden = !d.paw;   // PAW nur, wenn eingerichtet
-
-    fillSettings(d.settings);
 
     const sh = d.shift;
     document.getElementById("shiftRow").hidden = !sh;
@@ -778,72 +703,8 @@
         btn.disabled = false;
       }
     }));
-  // Formular nur fuellen, solange nichts ungespeichert geaendert wurde
-  const settingsForm = document.getElementById("settings");
-  let settingsDirty = false;
-  function fillSettings(s) {
-    if (!s || settingsDirty) return;
-    for (const [key, value] of Object.entries(s)) {
-      const el = settingsForm.elements[key];
-      if (!el) continue;
-      if (el.type === "checkbox") el.checked = value;
-      else el.value = value;
-    }
-    markContacts();
-  }
-  // Auswahl der PagerDuty-Kontakte fuer LAS/Schicht, gespeichert als IDs in LAS_CONTACTS
-  const contactsInput = settingsForm.elements.LAS_CONTACTS;
-  const contactList = document.getElementById("contactList");
-  function markContacts() {
-    const ids = contactsInput.value.split(",").filter(Boolean);
-    contactList.querySelectorAll("input[data-contact]").forEach(cb => { cb.checked = ids.includes(cb.dataset.contact); });
-  }
-  async function loadContacts() {
-    try {
-      const r = await fetch("/api/contacts", { cache: "no-store" });
-      const res = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(res.error || "HTTP " + r.status);
-      contactList.classList.toggle("svc", !res.contacts.length);
-      contactList.innerHTML = res.contacts.map(c => `<label class="check"><input type="checkbox" data-contact="${esc(c.id)}">
-        ${esc(c.kind)}: ${esc(c.label)}${c.address && c.kind !== "Push" ? ` (${esc(c.address)})` : ""}</label>`).join("")
-        || "Keine Kontakte in PagerDuty gefunden";
-      markContacts();
-    } catch (e) {
-      contactList.textContent = "Kontakte nicht geladen: " + e.message;
-    }
-  }
-  contactList.addEventListener("change", () => {
-    contactsInput.value = [...contactList.querySelectorAll("input[data-contact]:checked")]
-      .map(cb => cb.dataset.contact).join(",");
-  });
-  document.getElementById("settingsBox").addEventListener("toggle", ev => { if (ev.target.open) loadContacts(); });
-  settingsForm.addEventListener("input", () => { settingsDirty = true; });
-  settingsForm.addEventListener("submit", async ev => {
-    ev.preventDefault();
-    const body = {};
-    for (const el of settingsForm.elements) {
-      if (!el.name || el.tagName === "FIELDSET") continue;
-      body[el.name] = el.type === "checkbox" ? el.checked : el.value;
-    }
-    const btn = settingsForm.querySelector("button[type=submit]");
-    btn.disabled = true;
-    try {
-      const r = await fetch("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-PD-Filter": "1" },
-        body: JSON.stringify(body),
-      });
-      const res = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(res.error || "HTTP " + r.status);
-      settingsDirty = false;
-      toast("✓ Einstellungen gespeichert");
-      refresh();
-    } catch (e) {
-      toast("Speichern fehlgeschlagen: " + e.message, true);
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  // Einstellungen (Zahnrad, settings.js): nach dem Speichern sofort neu laden
+  window.addEventListener("pd-settings-saved", () => refresh());
 
   async function editCustomer(action, name) {
     const r = await fetch("/api/customers/" + action, {
@@ -898,5 +759,6 @@
   refresh();
   setInterval(refresh, 3000);
 </script>
+<script src="/settings.js"></script>
 </body>
 </html>

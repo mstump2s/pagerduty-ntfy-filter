@@ -145,6 +145,7 @@ MINI_FILE = BASE_DIR / "mini.html"          # kompakte Ansicht fuer das Extensio
 PAW_FILE = BASE_DIR / "paw.html"            # PAW Exchange: Uploads vom PAW per Klick analysieren
 STATS_PAGE_FILE = BASE_DIR / "stats.html"   # Statistik und Schichtplan
 SHIFTS_PAGE_FILE = BASE_DIR / "shifts.html" # Uebersicht: wer uebernimmt welche Kunden (aus shifts.csoc.gk.rocks)
+SETTINGS_JS_FILE = BASE_DIR / "settings.js" # Zahnrad-Einstellungen, auf allen Seiten eingebunden
 SHIFTS_FILE = BASE_DIR / "shifts_data.json" # von der Extension gespiegelte shifts-Rohdaten
 
 # Zustand fuer die Live-Ansicht
@@ -1576,6 +1577,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 return self._send(404, f"{pages[self.path].name} fehlt".encode(), "text/plain; charset=utf-8")
             return self._send(200, body, "text/html; charset=utf-8")
+        if self.path == "/settings.js":
+            try:
+                return self._send(200, SETTINGS_JS_FILE.read_bytes(), "text/javascript; charset=utf-8")
+            except FileNotFoundError:
+                return self._send(404, b"settings.js fehlt", "text/plain; charset=utf-8")
+        if self.path == "/api/settings":
+            return self._json(200, {"settings": current_settings()})
         if self.path == "/api/contacts":
             err, contacts = fetch_contacts()
             return self._json(502, {"error": err}) if err else self._json(200, {"contacts": contacts})
