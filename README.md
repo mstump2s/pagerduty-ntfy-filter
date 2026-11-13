@@ -25,6 +25,10 @@ PagerDuty acknowledgen und resolven oder den Rest deiner Schicht abgeben kannst.
   - Statistik-Seite (`/stats`): Resolves pro Analyst gegen On-Call-Stunden, wer gerade Schicht hat, Schichtplan für zwei Wochen
   - Einstellungen (leise Mitteilungen, Service-Filter, Schedule, Zeitfenster …) live
     ändern, ohne Neustart
+- **PD-Info für den PAW** (`paw-info.html`): eigenständige HTML-Seite ohne Dienst, einfach im
+  Browser öffnen. Zeigt offene Incidents nur zur Info (kein Ack/Resolve, keine Mitteilungen) und
+  liest den Sentinel-Link aus den Alerts, mit einem Klick zu öffnen. API-Key (am besten read-only)
+  und Kundenliste bleiben im localStorage des Browsers.
 - **Browser-Extension** (optional, Chrome/Edge): kompaktes Popup mit Ack/Resolve, Badge
   mit der Zahl offener Incidents deiner Kunden, Icon blinkt bei lauten Alarmen
 - **Nur im Schedule aktiv** (`ONLY_ON_CALL=true`): Bist du laut PagerDuty gerade nicht

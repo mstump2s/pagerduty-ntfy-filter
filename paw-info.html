@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PD-Info</title>
+<!--
+  Reine Info-Seite fuer den PAW: zeigt offene PagerDuty-Incidents und den Sentinel-Link daraus.
+  Eigenstaendig, kein pd-filter-Dienst noetig: einfach die Datei im Browser oeffnen.
+  Nur lesend (GET): kein Ack/Resolve, keine Mitteilungen, kein Ton.
+  API-Key und Kundenliste bleiben im localStorage dieses Browsers.
+-->
+<style>
+  :root {
+    --bg: #fbfaf7; --panel: #ffffff; --text: #1f2328; --muted: #5d6670; --line: #e4e1d8; --line-soft: #efece4;
+    --head: #f6f4ee; --accent: #0b6e69; --accent-text: #ffffff;
+    --err: #b3261e; --warn: #7a5c00; --warn-bg: #fff3cf; --info: #2459a8;
+    --side: #1f2a2e; --side-text: #e8eeee; --side-muted: #b9c6c7; --side-hi: #2f4a4c; --side-tile: #2b383c;
+    --side-accent: #5fd3a6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121719; --panel: #1a2124; --text: #e6eaea; --muted: #9aa6a8; --line: #2a3336; --line-soft: #232c2f;
+      --head: #1f272a; --accent: #4fc3b0; --accent-text: #0b1f1d;
+      --err: #ff8a80; --warn: #e5c45a; --warn-bg: #332c12; --info: #8ab4ff;
+      --side: #0e1416; --side-hi: #22393b; --side-tile: #1b2629;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .mono, td.time, .tile .n { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .app { display: flex; flex-wrap: wrap; min-height: 100vh; }
+  .side { flex: 0 0 290px; min-width: 0; background: var(--side); color: var(--side-text);
+          padding: 22px 16px; display: flex; flex-direction: column; gap: 24px; }
+  @media (max-width: 820px) { .side { flex-basis: 100%; } }
+  .content { flex: 999 1 560px; min-width: 0; padding: 24px 28px 60px; display: flex; flex-direction: column; gap: 22px; }
+
+  .brand { display: flex; flex-direction: column; gap: 4px; }
+  .brand h1 { font-size: 17px; margin: 0; font-weight: 700; }
+  .brand .line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--side-muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--side-muted); flex: none; }
+  .dot.on { background: var(--side-accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--side-accent) 20%, transparent); }
+  .dot.err { background: #ff8a80; }
+  .side-label { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--side-muted);
+                margin: 0 0 8px; font-weight: 600; }
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .tile { background: var(--side-tile); border-radius: 8px; padding: 10px 12px; cursor: pointer; border: 1px solid transparent; }
+  .tile:hover { border-color: var(--side-accent); }
+  .tile.active { background: var(--side-hi); border-color: var(--side-accent); }
+  .tile .n { font-size: 22px; font-weight: 500; line-height: 1.2; }
+  .tile .l { color: var(--side-muted); font-size: 12px; }
+  .tile.wide { grid-column: 1 / -1; }
+  .side-block { display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--side-muted); }
+  .side-block b { color: var(--side-text); font-weight: 600; }
+  .side label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .side .btn { background: var(--side-tile); color: var(--side-text); border-color: transparent; align-self: flex-start; }
+  .side .btn:hover { border-color: var(--side-accent); color: var(--side-accent); }
+
+  h2 { font-size: 16px; margin: 0; font-weight: 600; }
+  h2 .sub { color: var(--muted); font-weight: 400; }
+  section { display: flex; flex-direction: column; gap: 10px; }
+  .content a { color: var(--accent); text-decoration: none; }
+  .content a:hover { text-decoration: underline; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .wrap { overflow-x: auto; }
+  .empty { padding: 18px; color: var(--muted); text-align: center; }
+  .error { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); border-radius: 8px;
+           padding: 10px 14px; white-space: pre-wrap; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .search { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line);
+            background: var(--panel); color: var(--text); min-width: 240px; flex: 1; max-width: 420px; }
+  .btn { font: inherit; font-size: 13px; padding: 6px 13px; border-radius: 7px; cursor: pointer;
+         border: 1px solid var(--line); background: var(--panel); color: var(--text); white-space: nowrap; text-decoration: none; display: inline-block; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none !important; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text) !important; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .b-trig { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err); }
+  .b-ack { background: var(--warn-bg); color: var(--warn); }
+  .b-cust { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  .b-high { background: color-mix(in srgb, var(--err) 14%, transparent); color: var(--err); }
+  .b-low { background: var(--line-soft); color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 500; background: var(--head); }
+  tr:last-child td { border-bottom: 0; }
+  tr.mine td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+  td.time { white-space: nowrap; color: var(--muted); font-size: 13px; width: 1%; }
+  td.act { white-space: nowrap; width: 1%; text-align: right; }
+  td.title { overflow-wrap: anywhere; }
+  td.title .sub { color: var(--muted); font-size: 12px; }
+  .none { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .copy { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 4px; }
+  .copy:hover { color: var(--accent); }
+
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text);
+           padding: 20px 22px; width: min(520px, calc(100% - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog h3 { margin: 0 0 12px; font-size: 16px; }
+  dialog label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
+  dialog input, dialog textarea { font: inherit; font-size: 13px; width: 100%; padding: 7px 9px; border-radius: 7px;
+           border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  dialog textarea { min-height: 120px; resize: vertical; }
+  dialog .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+  @media (max-width: 640px) { .content { padding: 18px 14px 60px; } }
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="side">
+  <div class="brand">
+    <h1>PD-Info · PAW</h1>
+    <span class="line"><span class="dot" id="dot"></span><span>zuletzt geholt <b id="updated" class="mono">–</b></span></span>
+  </div>
+
+  <div>
+    <p class="side-label">Offene Incidents</p>
+    <div class="tiles">
+      <div class="tile wide" data-f="all"><div class="n" id="nAll">0</div><div class="l">alle offen</div></div>
+      <div class="tile" data-f="triggered"><div class="n" id="nTrig">0</div><div class="l">triggered</div></div>
+      <div class="tile" data-f="acknowledged"><div class="n" id="nAck">0</div><div class="l">acknowledged</div></div>
+      <div class="tile wide" data-f="mine"><div class="n" id="nMine">0</div><div class="l">meine Kunden</div></div>
+    </div>
+  </div>
+
+  <div class="side-block">
+    <p class="side-label" style="margin-bottom:0">Ansicht</p>
+    <span>Nur Info: <b>kein Ack/Resolve, keine Mitteilungen</b></span>
+    <label><input type="checkbox" id="auto" checked> alle 60 s neu laden</label>
+    <button class="btn" id="refresh" type="button">Neu laden</button>
+    <button class="btn" id="openSettings" type="button">Einstellungen</button>
+  </div>
+</aside>
+
+<main class="content">
+  <div class="error" id="error" hidden></div>
+
+  <section>
+    <div class="toolbar">
+      <h2 id="listTitle">Offene Incidents</h2>
+      <input class="search" id="search" type="search" placeholder="Suchen (Titel, Service, Kunde, #Nummer)">
+    </div>
+    <div class="card wrap"><table>
+      <thead><tr><th>Erstellt</th><th>Status</th><th>Incident</th><th>Zugewiesen</th><th style="text-align:right">Sentinel</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="empty">lade…</td></tr></tbody>
+    </table></div>
+    <div class="meta">Der Sentinel-Link wird aus den Alerts des Incidents gelesen (Links, Details, CEF-Details, Beschreibung).
+      Gibt es mehrere, steht der erste als Knopf da, die übrigen dahinter.</div>
+  </section>
+</main>
+</div>
+
+<dialog id="settings">
+  <form method="dialog" id="settingsForm">
+    <h3>Einstellungen</h3>
+    <label for="sToken">PagerDuty API-Key</label>
+    <input id="sToken" type="password" autocomplete="off" spellcheck="false" placeholder="u+xxxxxxxx…">
+    <div class="hint">Am besten ein <b>Read-only</b>-Key (User Settings → API Access). Die Seite fragt nur lesend ab.
+      Der Key bleibt im localStorage dieses Browsers.</div>
+    <label for="sServices">Service-IDs (optional)</label>
+    <input id="sServices" type="text" spellcheck="false" placeholder="PXXXXXX, PYYYYYY">
+    <div class="hint">Leer = alle Services, die der Key sehen darf.</div>
+    <label for="sCustomers">Meine Kunden (optional, eine Zeile pro Kunde)</label>
+    <textarea id="sCustomers" spellcheck="false" placeholder="Kunde A&#10;Kunde B"></textarea>
+    <div class="hint">Treffer per Teilstring im Titel, Groß-/Kleinschreibung egal – wie im pd-filter.</div>
+    <div class="row">
+      <button class="btn" value="cancel" type="submit">Abbrechen</button>
+      <button class="btn primary" value="save" type="submit">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  const PD_API = "https://api.pagerduty.com";
+  const $ = id => document.getElementById(id);
+  const store = {
+    get token() { return localStorage.getItem("pdInfoToken") || ""; },
+    get services() { return (localStorage.getItem("pdInfoServices") || "").split(/[\s,;]+/).filter(Boolean); },
+    get customers() { return (localStorage.getItem("pdInfoCustomers") || "").split("\n").map(s => s.trim()).filter(Boolean); },
+  };
+  let incidents = [], filter = localStorage.getItem("pdInfoFilter") || "all", loading = false;
+  const links = new Map();     // Incident-ID -> Liste der Sentinel-Links (aendert sich nicht, daher gemerkt)
+
+  function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+  function when(v) {
+    const d = new Date(v);
+    if (isNaN(d)) return "";
+    const today = new Date().toDateString() === d.toDateString();
+    return (today ? "heute" : d.toLocaleDateString("de-DE")) + ", " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  }
+  // Wie norm() im pd-filter: Unicode vereinheitlichen, unsichtbare Zeichen raus, Leerraum zusammenfassen
+  function norm(s) { return (s || "").normalize("NFKC").replace(/[﻿​‌‍⁠­]/g, "").split(/\s+/).filter(Boolean).join(" ").toLowerCase(); }
+  function customerOf(title) { const t = norm(title); return store.customers.find(c => norm(c) && t.includes(norm(c))) || null; }
+
+  async function pd(path, params = {}) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) (Array.isArray(v) ? v : [v]).forEach(x => q.append(k, x));
+    const r = await fetch(`${PD_API}${path}?${q}`, {
+      headers: { "Authorization": "Token token=" + store.token },
+      cache: "no-store",
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      const msg = (j.error && (j.error.message + (j.error.errors ? ": " + j.error.errors.join(", ") : ""))) || "";
+      throw new Error(r.status === 401 ? "API-Key ungültig (401)" : `HTTP ${r.status} ${msg}`.trim());
+    }
+    return r.json();
+  }
+
+  async function fetchOpen() {
+    const all = [];
+    let offset = 0;
+    for (;;) {
+      const params = { "statuses[]": ["triggered", "acknowledged"], limit: 100, offset, "sort_by": "created_at:desc" };
+      if (store.services.length) params["service_ids[]"] = store.services;
+      const data = await pd("/incidents", params);
+      const page = data.incidents || [];
+      all.push(...page);
+      if (!data.more || !page.length) return all;
+      offset += page.length;
+    }
+  }
+
+  // ---- Sentinel-Link aus dem Incident holen ----
+  const URL_RE = /https?:\/\/[^\s"'<>\\`{}|^]+/gi;
+  function isSentinel(u) {
+    const s = u.toLowerCase();
+    if (/portal\.azure\.(com|us|cn)/.test(s) && /security_insights|sentinel/.test(s)) return true;
+    if (/security\.microsoft\.com|security\.microsoft\.us/.test(s) && /\/(incidents?|alerts?)\b|incidentid|alertid/.test(s)) return true;
+    if (/sentinel/.test(s)) return true;
+    return false;
+  }
+  function rank(u) {   // Azure-Portal-Link auf den Sentinel-Incident zuerst, dann Defender-Portal, dann der Rest
+    const s = u.toLowerCase();
+    if (/portal\.azure/.test(s) && /incident/.test(s)) return 0;
+    if (/security\.microsoft/.test(s) && /incident/.test(s)) return 1;
+    if (/portal\.azure/.test(s)) return 2;
+    return 3;
+  }
+  function clean(u) {
+    u = u.replace(/&amp;/g, "&").replace(/[.,;:!?)\]]+$/, "");
+    try { return new URL(u).href; } catch { return null; }
+  }
+  function collectUrls(value, out, depth = 0) {
+    if (value == null || depth > 12) return;
+    if (typeof value === "string") {
+      for (const m of value.match(URL_RE) || []) out.push(m);
+      // Manchmal steckt JSON als String in den Details
+      if (/^\s*[{[]/.test(value)) { try { collectUrls(JSON.parse(value), out, depth + 1); } catch {} }
+    } else if (Array.isArray(value)) value.forEach(v => collectUrls(v, out, depth + 1));
+    else if (typeof value === "object") Object.values(value).forEach(v => collectUrls(v, out, depth + 1));
+  }
+  function sentinelLinks(sources) {
+    const raw = [];
+    sources.forEach(s => collectUrls(s, raw));
+    const seen = new Set(), res = [];
+    for (const u of raw.map(clean).filter(Boolean)) {
+      if (isSentinel(u) && !seen.has(u)) { seen.add(u); res.push(u); }
+    }
+    return res.sort((a, b) => rank(a) - rank(b));
+  }
+  async function loadLinks(inc) {
+    if (links.has(inc.id)) return;
+    try {
+      const data = await pd(`/incidents/${inc.id}/alerts`, { limit: 25 });
+      const sources = [inc.description, inc.body, inc.title];
+      for (const a of data.alerts || []) sources.push(a.body, a.summary);
+      links.set(inc.id, sentinelLinks(sources));
+    } catch (e) {
+      links.set(inc.id, { error: e.message });
+    }
+    renderLinks(inc.id);
+  }
+  // Hoechstens 4 Anfragen gleichzeitig, damit PagerDuty nicht drosselt
+  async function loadAllLinks(list) {
+    const todo = list.filter(i => !links.has(i.id));
+    const worker = async () => { while (todo.length) await loadLinks(todo.shift()); };
+    await Promise.all(Array.from({ length: 4 }, worker));
+  }
+
+  function linkCell(id) {
+    const l = links.get(id);
+    if (!l) return '<span class="none">lade…</span>';
+    if (l.error) return `<span class="none" title="${esc(l.error)}">Fehler</span>`;
+    if (!l.length) return '<span class="none">kein Link</span>';
+    const extra = l.slice(1).map((u, i) => ` <a href="${esc(u)}" target="_blank" rel="noopener noreferrer" title="${esc(u)}">#${i + 2}</a>`).join("");
+    return `<a class="btn primary" href="${esc(l[0])}" target="_blank" rel="noopener noreferrer" title="${esc(l[0])}">Sentinel öffnen</a>`
+         + `<button class="copy" type="button" data-copy="${esc(l[0])}" title="Link kopieren">⧉</button>${extra}`;
+  }
+  function renderLinks(id) {
+    const cell = document.querySelector(`tr[data-id="${CSS.escape(id)}"] td.act`);
+    if (cell) cell.innerHTML = linkCell(id);
+  }
+
+  function visible() {
+    const q = norm($("search").value);
+    return incidents.filter(i => {
+      if (filter === "triggered" || filter === "acknowledged") { if (i.status !== filter) return false; }
+      else if (filter === "mine" && !customerOf(i.title)) return false;
+      if (!q) return true;
+      const hay = norm([i.title, i.service?.summary, "#" + i.incident_number, customerOf(i.title)].join(" "));
+      return hay.includes(q);
+    });
+  }
+
+  function render() {
+    const mine = incidents.filter(i => customerOf(i.title));
+    $("nAll").textContent = incidents.length;
+    $("nTrig").textContent = incidents.filter(i => i.status === "triggered").length;
+    $("nAck").textContent = incidents.filter(i => i.status === "acknowledged").length;
+    $("nMine").textContent = store.customers.length ? mine.length : "–";
+    document.querySelectorAll(".tile").forEach(t => t.classList.toggle("active", t.dataset.f === filter));
+    $("listTitle").innerHTML = { all: "Offene Incidents", triggered: "Triggered", acknowledged: "Acknowledged", mine: "Meine Kunden" }[filter]
+      + ' <span class="sub">· nur Info</span>';
+
+    const list = visible();
+    $("rows").innerHTML = list.length ? list.map(i => {
+      const cust = customerOf(i.title);
+      const status = i.status === "triggered" ? '<span class="badge b-trig">triggered</span>' : '<span class="badge b-ack">acknowledged</span>';
+      const urg = i.urgency === "high" ? '<span class="badge b-high">high</span>' : '<span class="badge b-low">low</span>';
+      const who = (i.assignments || []).map(a => a.assignee?.summary).filter(Boolean).join(", ") || "–";
+      return `<tr data-id="${esc(i.id)}" class="${cust ? "mine" : ""}">
+        <td class="time">${esc(when(i.created_at))}</td>
+        <td>${status} ${urg}</td>
+        <td class="title"><a href="${esc(i.html_url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>
+          <div class="sub">#${esc(i.incident_number)} · ${esc(i.service?.summary || "")}${cust ? ` · <span class="badge b-cust">${esc(cust)}</span>` : ""}</div></td>
+        <td>${esc(who)}</td>
+        <td class="act">${linkCell(i.id)}</td></tr>`;
+    }).join("") : `<tr><td colspan="5" class="empty">${incidents.length ? "Nichts für diesen Filter." : "Keine offenen Incidents."}</td></tr>`;
+    loadAllLinks(list);
+  }
+
+  async function load() {
+    if (loading) return;
+    if (!store.token) {
+      $("rows").innerHTML = '<tr><td colspan="5" class="empty">Noch kein API-Key – unter <b>Einstellungen</b> eintragen.</td></tr>';
+      $("dot").className = "dot";
+      return;
+    }
+    loading = true; $("refresh").disabled = true;
+    try {
+      incidents = await fetchOpen();
+      const ids = new Set(incidents.map(i => i.id));
+      [...links.keys()].forEach(k => { if (!ids.has(k)) links.delete(k); });
+      // Fehlgeschlagene Link-Abfragen beim naechsten Laden nochmal versuchen
+      [...links.entries()].forEach(([k, v]) => { if (v && v.error) links.delete(k); });
+      $("error").hidden = true;
+      $("dot").className = "dot on";
+      $("updated").textContent = when(new Date());
+      render();
+    } catch (e) {
+      $("dot").className = "dot err";
+      $("error").hidden = false;
+      $("error").textContent = "PagerDuty nicht erreichbar: " + e.message;
+    } finally { loading = false; $("refresh").disabled = false; }
+  }
+
+  // ---- Bedienung ----
+  document.querySelectorAll(".tile").forEach(t => t.addEventListener("click", () => {
+    filter = t.dataset.f; localStorage.setItem("pdInfoFilter", filter); render();
+  }));
+  $("search").addEventListener("input", render);
+  $("refresh").onclick = load;
+  $("rows").addEventListener("click", async ev => {
+    const b = ev.target.closest("[data-copy]"); if (!b) return;
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "✓"; }
+    catch { b.textContent = "✗"; }
+    setTimeout(() => b.textContent = "⧉", 1500);
+  });
+  $("auto").checked = localStorage.getItem("pdInfoAuto") !== "0";
+  $("auto").onchange = () => localStorage.setItem("pdInfoAuto", $("auto").checked ? "1" : "0");
+
+  $("openSettings").onclick = () => {
+    $("sToken").value = store.token;
+    $("sServices").value = store.services.join(", ");
+    $("sCustomers").value = store.customers.join("\n");
+    $("settings").showModal();
+  };
+  $("settings").addEventListener("close", () => {
+    if ($("settings").returnValue !== "save") return;
+    localStorage.setItem("pdInfoToken", $("sToken").value.trim());
+    localStorage.setItem("pdInfoServices", $("sServices").value.trim());
+    localStorage.setItem("pdInfoCustomers", $("sCustomers").value);
+    links.clear();
+    load();
+  });
+
+  if (!store.token) $("openSettings").click();
+  load();
+  setInterval(() => { if (!document.hidden && $("auto").checked) load(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && $("auto").checked) load(); });
+</script>
+</body>
+</html>
